@@ -1,64 +1,112 @@
 import uvicorn
 import argparse
 import os
+import threading
+import subprocess
+import time
+import cv2
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-import cv2
 
-app = FastAPI()
+class VideoCamera:
+    def __init__(self):
+        self.frame = None
+        self.condition = threading.Condition()
+        self.running = False
+        self.thread = None
+        self.process = None
+        self.camera = None
 
-import subprocess
-import time
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        
+        # Start rpicam-vid as a subprocess streaming to a TCP port
+        cmd = [
+            "rpicam-vid",
+            "-t", "0",
+            "--inline",
+            "--listen",
+            "-o", "tcp://0.0.0.0:8888",
+            "--codec", "mjpeg",
+            "--width", "640",
+            "--height", "480",
+            "--framerate", "15", # Lower framerate to reduce load
+            "--vflip"
+        ]
+        
+        print(f"Starting camera process: {' '.join(cmd)}")
+        self.process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        
+        # Give it a moment to start
+        time.sleep(2)
+        
+        # Connect OpenCV to the TCP stream
+        print("Connecting OpenCV to tcp://127.0.0.1:8888")
+        self.camera = cv2.VideoCapture("tcp://127.0.0.1:8888")
+
+        if not self.camera.isOpened():
+            print("Error: Could not connect to camera stream.")
+            self.stop()
+            return
+
+        self.thread = threading.Thread(target=self.update, args=())
+        self.thread.daemon = True
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1.0)
+        if self.camera:
+            self.camera.release()
+        if self.process:
+            self.process.terminate()
+        print("Camera process terminated.")
+
+    def update(self):
+        print("Camera update loop started.")
+        while self.running:
+            if self.camera and self.camera.isOpened():
+                success, frame = self.camera.read()
+                if success:
+                    ret, buffer = cv2.imencode('.jpg', frame)
+                    if ret:
+                        with self.condition:
+                            self.frame = buffer.tobytes()
+                            self.condition.notify_all()
+                else:
+                    print("Error: Failed to read frame from stream.")
+                    break
+            else:
+                break
+        print("Camera update loop ended.")
+
+camera = VideoCamera()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    camera.start()
+    yield
+    # Shutdown
+    camera.stop()
+
+app = FastAPI(lifespan=lifespan)
 
 def get_camera_frame():
-    # Start rpicam-vid as a subprocess streaming to a TCP port
-    # We use a random high port or fixed one. Let's use 8888.
-    cmd = [
-        "rpicam-vid",
-        "-t", "0",
-        "--inline",
-        "--listen",
-        "-o", "tcp://0.0.0.0:8888",
-        "--codec", "mjpeg",
-        "--width", "640",
-        "--height", "480",
-        "--framerate", "15", # Lower framerate to reduce load
-        "--vflip"
-    ]
-    
-    print(f"Starting camera process: {' '.join(cmd)}")
-    process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    
-    # Give it a moment to start
-    time.sleep(2)
-    
-    # Connect OpenCV to the TCP stream
-    print("Connecting OpenCV to tcp://127.0.0.1:8888")
-    camera = cv2.VideoCapture("tcp://127.0.0.1:8888")
-
-    if not camera.isOpened():
-        print("Error: Could not connect to camera stream.")
-        process.terminate()
-        return
-
-    try:
-        while True:
-            success, frame = camera.read()
-            if not success:
-                print("Error: Failed to read frame from stream.")
-                break
-            ret, buffer = cv2.imencode('.jpg', frame)
-            if not ret:
-                continue
-            frame_bytes = buffer.tobytes()
+    while True:
+        with camera.condition:
+            camera.condition.wait()
+            frame = camera.frame
+        
+        if frame:
             yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-    finally:
-        camera.release()
-        process.terminate()
-        print("Camera process terminated.")
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
 @app.get("/video_feed")
 async def video_feed():
