@@ -20,25 +20,33 @@ Keep cats off of the counter automatically.
 ### Phases
 
 #### Phase 1 - Basic control software. Web page w/ camera feed, pan / tilt controls
+
 **Hardware** - Pan / Tilt gantry with mounted camera - very basic
+
 **Software** - Pan / Tilt control w/ cat detection and basic tracking
 
 <br />
 
 #### Phase 2 - Basic water mechanics
+
 **Hardware** - Electronic water launch
+
 **Software** - Manual control of water launch
 
 <br />
 
 #### Phase 3 - Integration
+
 **Hardware** - Water mounted to pan / tilt gantry
+
 **Software** - Auto mode w/ manual firing enabled when cat is detected.
 
 <br />
 
 #### Phase 4 - Refinement
+
 **Hardware** - Water level sensor, audible deterrent alarm (arbirtrary mp3)?
+
 **Software** - PID / Kalman Filter / UI improvements
 
 ---
