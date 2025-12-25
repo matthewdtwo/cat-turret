@@ -5,15 +5,19 @@ import threading
 import subprocess
 import time
 import cv2
-from contextlib import asynccontextmanager
 
+
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from cat_detector import CatDetector
+
 class VideoCamera:
     def __init__(self):
         self.frame = None
+        self.raw_frame = None
         self.condition = threading.Condition()
         self.running = False
         self.thread = None
@@ -31,12 +35,12 @@ class VideoCamera:
             "-t", "0",
             "--inline",
             "--listen",
-            "-o", "tcp://0.0.0.0:8888",
+            "-o", "tcp://127.0.0.1:8888",
             "--codec", "mjpeg",
             "--width", "640",
             "--height", "480",
-            "--framerate", "15", # Lower framerate to reduce load
-            "--vflip"
+            "--framerate", "10",
+            "--vflip",
         ]
         
         print(f"Starting camera process: {' '.join(cmd)}")
@@ -78,6 +82,7 @@ class VideoCamera:
                     if ret:
                         with self.condition:
                             self.frame = buffer.tobytes()
+                            self.raw_frame = frame
                             self.condition.notify_all()
                 else:
                     print("Error: Failed to read frame from stream.")
@@ -87,16 +92,20 @@ class VideoCamera:
         print("Camera update loop ended.")
 
 camera = VideoCamera()
+detector = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    global detector
     camera.start()
+    detector = CatDetector()
     yield
     # Shutdown
     camera.stop()
 
 app = FastAPI(lifespan=lifespan)
+
 
 def get_camera_frame():
     while True:
@@ -108,9 +117,28 @@ def get_camera_frame():
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
+def get_processed_frame():
+    while True:
+        with camera.condition:
+            camera.condition.wait()
+            raw_frame = camera.raw_frame
+        
+        if raw_frame is not None:
+            annotated_image, _ = detector.detect(raw_frame)
+            if annotated_image is not None:
+                ret, buffer = cv2.imencode('.jpg', annotated_image)
+                if ret:
+                    frame_bytes = buffer.tobytes()
+                    yield (b'--frame\r\n'
+                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
 @app.get("/video_feed")
 async def video_feed():
     return StreamingResponse(get_camera_frame(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/video_feed_processed")
+async def video_feed_processed():
+    return StreamingResponse(get_processed_frame(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 @app.get("/")
 async def read_root():
