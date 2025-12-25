@@ -67,6 +67,8 @@ class CatDetector:
         self.detector = ObjectDetector.create_from_options(options)
         self.tracker = CatTracker()
         self.start_time = time.time()
+        self.last_detection_time = 0
+        self.prediction_timeout = 1.0 # Stop predicting after 1 second of no detection
 
     def detect(self, image):
         """
@@ -107,10 +109,16 @@ class CatDetector:
 
             self.tracker.update(target_cat[0])
             confidence = target_cat[1]
+            self.last_detection_time = time.time()
             
             # Use the corrected state after update
             if self.tracker.found:
                 final_pos = (int(self.tracker.kf.statePost[0, 0]), int(self.tracker.kf.statePost[1, 0]))
+        
+        # Check if prediction is stale
+        if time.time() - self.last_detection_time > self.prediction_timeout:
+            final_pos = None
+            self.tracker.found = False # Reset tracker
         
         annotated_image = self._draw_detections(image, cat_detections, final_pos)
         
