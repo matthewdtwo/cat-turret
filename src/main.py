@@ -175,6 +175,8 @@ class VideoCamera:
             "--height", "480",
             "--framerate", "15",
             "--vflip",
+            "--autofocus-mode", "manual",
+            "--lens-position", "0.0",
         ]
         
         print(f"Starting camera process: {' '.join(cmd)}")
