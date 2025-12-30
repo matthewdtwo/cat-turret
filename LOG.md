@@ -1,4 +1,7 @@
-
+### 2025-12-30 integration
+- 3d printed hardware to mount spray bottle nozzle to pan tilt gantry.
+- refined software for smoother manual control of the turret. 
+- UI updates
 
 ### 2025-12-25 servo control
 - cat detection and tracking integrated. preliminary "target lock" functionality.

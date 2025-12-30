@@ -37,7 +37,7 @@ Keep cats off of the counter automatically.
 
 #### Phase 3 - Integration
 
-**Hardware** - Water mounted to pan / tilt gantry
+**Hardware** - Water mounted to pan / tilt gantry. Electronics mounting. Stand for system.
 
 **Software** - Auto mode w/ manual firing enabled when cat is detected.
 
