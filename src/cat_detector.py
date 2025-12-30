@@ -62,13 +62,19 @@ class CatDetector:
             running_mode=VisionRunningMode.VIDEO,
             max_results=5, # max cats found
             score_threshold=0.4,
-            category_allowlist=['cat']
+            category_allowlist=['cat', 'person']
         )
         self.detector = ObjectDetector.create_from_options(options)
         self.tracker = CatTracker()
         self.start_time = time.time()
         self.last_detection_time = 0
         self.prediction_timeout = 1.0 # Stop predicting after 1 second of no detection
+        self.target_class = 'cat' # Default target
+
+    def set_target_class(self, target_class):
+        if target_class in ['cat', 'person']:
+            self.target_class = target_class
+            print(f"Target class set to: {self.target_class}")
 
     def detect(self, image):
         """
@@ -127,11 +133,11 @@ class CatDetector:
     def _process_detections(self, detection_result):
         cat_detections = []
         if detection_result.detections:
-            print(f"Detections found: {len(detection_result.detections)}")
+            # print(f"Detections found: {len(detection_result.detections)}")
             for detection in detection_result.detections:
                 category = detection.categories[0]
-                print(f"Detected: {category.category_name} ({category.score:.2f})")
-                if category.category_name == 'cat':
+                # print(f"Detected: {category.category_name} ({category.score:.2f})")
+                if category.category_name == self.target_class:
                     bbox = detection.bounding_box
                     center_x = int(bbox.origin_x + (bbox.width / 2))
                     center_y = int(bbox.origin_y + (bbox.height / 2))
@@ -145,7 +151,7 @@ class CatDetector:
         for (center, confidence) in detections:
             x, y = center
             cv2.circle(annotated_image, (x, y), 5, (0, 255, 0), -1)
-            text = f"Cat: {confidence:.2f}"
+            text = f"{self.target_class.capitalize()}: {confidence:.2f}"
             cv2.putText(annotated_image, text, (x - 20, y - 10),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         

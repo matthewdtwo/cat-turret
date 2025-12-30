@@ -261,6 +261,9 @@ class ServoRequest(BaseModel):
 class TrackingRequest(BaseModel):
     enabled: bool
 
+class DetectionTargetRequest(BaseModel):
+    target: str
+
 class ConfigRequest(BaseModel):
     pan_invert: bool
     tilt_invert: bool
@@ -302,6 +305,14 @@ async def fire_turret():
 async def set_tracking(request: TrackingRequest):
     turret_controller.tracking_enabled = request.enabled
     return {"status": "ok", "enabled": turret_controller.tracking_enabled}
+
+@app.post("/set_detection_target")
+async def set_detection_target(request: DetectionTargetRequest):
+    global detector
+    if detector:
+        detector.set_target_class(request.target)
+        return {"status": "ok", "target": detector.target_class}
+    return {"status": "error", "message": "Detector not initialized"}
 
 @app.post("/control_servos")
 async def control_servos(request: ServoRequest):

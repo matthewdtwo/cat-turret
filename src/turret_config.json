@@ -1,10 +1,10 @@
 {
-    "pan_invert": false,
-    "tilt_invert": true,
-    "kp_pan": 0.03,
-    "kd_pan": 0.005,
-    "kp_tilt": 0.015,
-    "kd_tilt": 0.005,
+    "pan_invert": true,
+    "tilt_invert": false,
+    "kp_pan": 0.025,
+    "kd_pan": 0.008,
+    "kp_tilt": 0.01,
+    "kd_tilt": 0.008,
     "trigger_rest_angle": 45,
     "trigger_fire_angle": 180
 }

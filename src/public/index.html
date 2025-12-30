@@ -185,12 +185,10 @@
         .pid-grid {
             display: grid;
             grid-template-columns: auto 1fr auto 1fr;
-            gap: 5px;
-            align-items: center;
+            gap: 10px;
         }
         .pid-grid label {
             min-width: 0;
-            text-align: right;
             padding-right: 5px;
         }
         .pid-grid input {
@@ -275,7 +273,9 @@
 
         <div class="side-panel">
             <div class="action-panel">
-                <button id="btn-tracking" class="action-btn">Auto Tracking: OFF</button>                <button id="btn-armed" class="action-btn"><span>ARMED (Hold)</span></button>                <button id="btn-fire" class="action-btn"><span>FIRE</span></button>
+                <button id="btn-tracking" class="action-btn">Auto Tracking: OFF</button>
+                <button id="btn-detect-toggle" class="action-btn" style="background: #007bff;">Detect: Cat</button>
+                <button id="btn-armed" class="action-btn"><span>ARMED (Hold)</span></button>                <button id="btn-fire" class="action-btn"><span>FIRE</span></button>
             </div>
 
             <div class="debug-panel">
@@ -345,6 +345,7 @@
     <script>
         const trackingToggle = document.getElementById('tracking-toggle');
         const btnTracking = document.getElementById('btn-tracking');
+        const btnDetectToggle = document.getElementById('btn-detect-toggle');
         const btnArmed = document.getElementById('btn-armed');
         const btnFire = document.getElementById('btn-fire');
         const invertPanCheckbox = document.getElementById('invert-pan');
@@ -357,6 +358,34 @@
         let currentPan = 90;
         let currentTilt = 90;
         let moveInterval = null;
+        let currentTarget = 'cat';
+
+        function updateDetectUI(target) {
+            currentTarget = target;
+            btnDetectToggle.textContent = `Detect: ${target.charAt(0).toUpperCase() + target.slice(1)}`;
+        }
+
+        function setDetectionTarget(target) {
+            fetch('/set_detection_target', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ target: target }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'ok') {
+                    updateDetectUI(data.target);
+                }
+            })
+            .catch(console.error);
+        }
+
+        btnDetectToggle.addEventListener('click', () => {
+            const newTarget = currentTarget === 'cat' ? 'person' : 'cat';
+            setDetectionTarget(newTarget);
+        });
 
         // Load initial config
         fetch('/config')
