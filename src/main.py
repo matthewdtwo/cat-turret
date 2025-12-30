@@ -248,6 +248,8 @@ async def lifespan(app: FastAPI):
     init_servos()
     yield
     # Shutdown
+    if detector:
+        detector.stop()
     camera.stop()
     deinit_servos()
 

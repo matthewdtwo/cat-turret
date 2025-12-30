@@ -3,6 +3,8 @@ import mediapipe as mp
 import numpy as np
 import os
 import time
+import threading
+import queue
 
 # Import MediaPipe Tasks
 BaseOptions = mp.tasks.BaseOptions
@@ -70,11 +72,49 @@ class CatDetector:
         self.last_detection_time = 0
         self.prediction_timeout = 1.0 # Stop predicting after 1 second of no detection
         self.target_class = 'cat' # Default target
+        self.latest_detections = []
+
+        # Threading setup
+        self.frame_queue = queue.Queue(maxsize=1)
+        self.result_queue = queue.Queue(maxsize=1)
+        self.stop_event = threading.Event()
+        self.detection_thread = threading.Thread(target=self._detection_worker)
+        self.detection_thread.daemon = True
+        self.detection_thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        self.detection_thread.join()
 
     def set_target_class(self, target_class):
         if target_class in ['cat', 'person']:
             self.target_class = target_class
             print(f"Target class set to: {self.target_class}")
+
+    def _detection_worker(self):
+        while not self.stop_event.is_set():
+            try:
+                try:
+                    image, timestamp_ms = self.frame_queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                
+                # MediaPipe processing
+                rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
+                
+                detection_result = self.detector.detect_for_video(mp_image, timestamp_ms)
+                cat_detections = self._process_detections(detection_result)
+                
+                # Clear old results if any to ensure we always have the freshest
+                while not self.result_queue.empty():
+                    try:
+                        self.result_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                self.result_queue.put(cat_detections)
+            except Exception as e:
+                print(f"Error in detection thread: {e}")
 
     def detect(self, image):
         """
@@ -87,46 +127,53 @@ class CatDetector:
         if image is None:
             return None, (None, 0)
 
-        rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_image)
-        
+        # 1. Submit frame for detection (non-blocking)
         timestamp_ms = int((time.time() - self.start_time) * 1000)
         
-        detection_result = self.detector.detect_for_video(mp_image, timestamp_ms)
-        
-        cat_detections = self._process_detections(detection_result)
-        
-        # Tracking logic
+        if self.frame_queue.empty():
+            # Use copy() to be safe against buffer reuse by OpenCV
+            self.frame_queue.put((image.copy(), timestamp_ms))
+            
+        # 2. Tracking logic
         predicted_pos = self.tracker.predict()
         final_pos = predicted_pos
         confidence = 0
         
-        if cat_detections:
-            target_cat = None
-            if self.tracker.found and predicted_pos is not None:
-                # Find closest detection to predicted position to avoid jumping between cats
-                def distance(p1, p2):
-                    return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
-                
-                target_cat = min(cat_detections, key=lambda x: distance(x[0], predicted_pos))
-            else:
-                # No track yet, pick the highest confidence one
-                target_cat = max(cat_detections, key=lambda x: x[1])
-
-            self.tracker.update(target_cat[0])
-            confidence = target_cat[1]
-            self.last_detection_time = time.time()
+        # Check for new detections
+        try:
+            cat_detections = self.result_queue.get_nowait()
+            self.latest_detections = cat_detections
             
-            # Use the corrected state after update
-            if self.tracker.found:
-                final_pos = (int(self.tracker.kf.statePost[0, 0]), int(self.tracker.kf.statePost[1, 0]))
+            # Update tracker with new detections
+            if cat_detections:
+                target_cat = None
+                if self.tracker.found and predicted_pos is not None:
+                    # Find closest detection to predicted position
+                    def distance(p1, p2):
+                        return np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2)
+                    target_cat = min(cat_detections, key=lambda x: distance(x[0], predicted_pos))
+                else:
+                    # No track yet, pick highest confidence
+                    target_cat = max(cat_detections, key=lambda x: x[1])
+
+                self.tracker.update(target_cat[0])
+                confidence = target_cat[1]
+                self.last_detection_time = time.time()
+                
+                # Use the corrected state after update
+                if self.tracker.found:
+                    final_pos = (int(self.tracker.kf.statePost[0, 0]), int(self.tracker.kf.statePost[1, 0]))
+                    
+        except queue.Empty:
+            pass
         
         # Check if prediction is stale
         if time.time() - self.last_detection_time > self.prediction_timeout:
             final_pos = None
             self.tracker.found = False # Reset tracker
         
-        annotated_image = self._draw_detections(image, cat_detections, final_pos)
+        # Draw latest detections (might be slightly stale, but better than nothing)
+        annotated_image = self._draw_detections(image, self.latest_detections, final_pos)
         
         return annotated_image, (final_pos, confidence)
 

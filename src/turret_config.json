@@ -1,6 +1,6 @@
 {
     "pan_invert": true,
-    "tilt_invert": false,
+    "tilt_invert": true,
     "kp_pan": 0.025,
     "kd_pan": 0.008,
     "kp_tilt": 0.01,
