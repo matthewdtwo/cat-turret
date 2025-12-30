@@ -4,5 +4,7 @@
     "kp_pan": 0.03,
     "kd_pan": 0.005,
     "kp_tilt": 0.015,
-    "kd_tilt": 0.005
+    "kd_tilt": 0.005,
+    "trigger_rest_angle": 45,
+    "trigger_fire_angle": 180
 }

@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cat Turret Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #222;
+            color: #eee;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 10px;
+        }
+        .main-content {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 300px;
+            grid-template-rows: auto auto;
+            gap: 20px;
+            align-items: start;
+            width: 100%;
+            max-width: 1200px;
+        }
+        .video-container {
+            grid-column: 1;
+            grid-row: 1;
+            position: relative;
+            width: 100%;
+            max-width: 100%;
+            aspect-ratio: 4/3;
+            background: #000;
+            border: 2px solid #444;
+        }
+        #main-feed {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        #pip-feed {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            width: 25%;
+            max-width: 200px;
+            aspect-ratio: 4/3;
+            border: 2px solid #fff;
+            z-index: 10;
+            background: #000;
+        }
+        .side-panel {
+            grid-column: 2;
+            grid-row: 1 / span 2;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            width: 100%;
+            max-width: 300px;
+        }
+        .action-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .action-btn {
+            width: 100%;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.1em;
+            font-weight: bold;
+            cursor: pointer;
+            color: white;
+            transition: background 0.2s;
+        }
+        #btn-tracking {
+            background: #444;
+        }
+        #btn-tracking.active {
+            background: #28a745;
+        }
+        #btn-armed {
+            background: #444;
+            position: relative;
+            overflow: hidden;
+        }
+        #btn-armed.armed {
+            background: #dc3545;
+        }
+        #btn-armed::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 0%;
+            background: rgba(0, 0, 0, 0.3);
+            transition: width 0s;
+        }
+        #btn-armed.charging::before {
+            width: 100%;
+            transition: width 1s linear;
+        }
+        #btn-armed span {
+            position: relative;
+            z-index: 1;
+        }
+        #btn-armed:active {
+            background: #d35400;
+        }
+        #btn-fire {
+            background: #dc3545;
+            position: relative;
+            overflow: hidden;
+        }
+        #btn-fire::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 0%;
+            background: rgba(0, 0, 0, 0.3);
+            transition: width 0s;
+        }
+        #btn-fire.charging::before {
+            width: 100%;
+            transition: width 1s linear;
+        }
+        #btn-fire span {
+            position: relative;
+            z-index: 1;
+        }
+        #btn-fire:active {
+            background: #bd2130;
+        }
+        .debug-panel, .config-panel {
+            width: 100%;
+            background: #333;
+            border-radius: 8px;
+            padding: 20px;
+            box-sizing: border-box;
+            border: 1px solid #444;
+        }
+        .debug-panel h2, .config-panel h2 {
+            margin-top: 0;
+            font-size: 1.2em;
+            border-bottom: 1px solid #555;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+        }
+        .stat-item {
+            margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .stat-item label {
+            color: #aaa;
+            width: auto;
+        }
+        .controls {
+            grid-column: 1;
+            grid-row: 2;
+            padding: 20px;
+            background: #333;
+            border-radius: 8px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .control-group {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        label {
+            min-width: 50px;
+        }
+        input[type=range] {
+            flex-grow: 1;
+            min-width: 150px;
+        }
+        .pid-grid {
+            display: grid;
+            grid-template-columns: auto 1fr auto 1fr;
+            gap: 5px;
+            align-items: center;
+        }
+        .pid-grid label {
+            min-width: 0;
+            text-align: right;
+            padding-right: 5px;
+        }
+        .pid-grid input {
+            width: 100%;
+            min-width: 0;
+        }
+        .pid-header {
+            grid-column: 1 / -1;
+            font-weight: bold;
+            margin-top: 5px;
+            margin-bottom: 2px;
+            color: #aaa;
+        }
+        
+        .turret-arrow {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.5);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            cursor: pointer;
+            user-select: none;
+            z-index: 20;
+            transition: background 0.2s, transform 0.1s;
+        }
+        .turret-arrow:active {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(0.95);
+        }
+        .arrow-up { top: 20px; left: 50%; transform: translateX(-50%); }
+        .arrow-down { bottom: 20px; left: 50%; transform: translateX(-50%); }
+        .arrow-left { left: 20px; top: 50%; transform: translateY(-50%); }
+        .arrow-right { right: 20px; top: 50%; transform: translateY(-50%); }
+
+        /* Mobile adjustments */
+        @media (max-width: 768px) {
+            body {
+                padding: 5px;
+            }
+            .main-content {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+            }
+            .side-panel {
+                max-width: 100%;
+                order: 3;
+            }
+            .video-container {
+                order: 1;
+            }
+            .controls {
+                margin-top: 0;
+                order: 2;
+            }
+            h1 {
+                font-size: 1.5em;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <h1>Cat Turret Command Center</h1>
+    
+    <div class="main-content">
+        <div class="video-container">
+            <img id="main-feed" src="/video_feed_processed" alt="Processed Feed">
+            <img id="pip-feed" src="/video_feed" alt="Raw Feed">
+            
+            <div class="turret-arrow arrow-up" data-axis="tilt" data-dir="-1">▲</div>
+            <div class="turret-arrow arrow-down" data-axis="tilt" data-dir="1">▼</div>
+            <div class="turret-arrow arrow-left" data-axis="pan" data-dir="-1">◀</div>
+            <div class="turret-arrow arrow-right" data-axis="pan" data-dir="1">▶</div>
+        </div>
+
+        <div class="side-panel">
+            <div class="action-panel">
+                <button id="btn-tracking" class="action-btn">Auto Tracking: OFF</button>                <button id="btn-armed" class="action-btn"><span>ARMED (Hold)</span></button>                <button id="btn-fire" class="action-btn"><span>FIRE</span></button>
+            </div>
+
+            <div class="debug-panel">
+                <h2>System Stats</h2>
+                <div class="stat-item">
+                    <label>CPU:</label>
+                    <span><span id="cpu-usage">--</span>%</span>
+                </div>
+                <div class="stat-item">
+                    <label>Temp:</label>
+                    <span><span id="cpu-temp">--</span>°C</span>
+                </div>
+                <div class="stat-item">
+                    <label>Memory:</label>
+                    <span><span id="mem-usage">--</span>%</span>
+                </div>
+                <div class="stat-item">
+                    <label>Used:</label>
+                    <span><span id="mem-used">--</span> MB</span>
+                </div>
+                <div class="stat-item">
+                    <label>Total:</label>
+                    <span><span id="mem-total">--</span> MB</span>
+                </div>
+            </div>
+            
+            <div class="config-panel">
+                <h2>Configuration</h2>
+                <div class="control-group">
+                    <label style="width: auto; margin-right: 10px;">Invert Pan</label>
+                    <input type="checkbox" id="invert-pan" style="flex-grow: 0;">
+                </div>
+                <div class="control-group">
+                    <label style="width: auto; margin-right: 10px;">Invert Tilt</label>
+                    <input type="checkbox" id="invert-tilt" style="flex-grow: 0;">
+                </div>
+                
+                <div style="margin-top: 10px; border-top: 1px solid #555; padding-top: 10px;">
+                    <h3 style="margin: 0 0 10px 0; font-size: 1em;">PID Tuning</h3>
+                    <div class="pid-grid">
+                        <div class="pid-header">Pan</div>
+                        <label>Kp</label>
+                        <input type="number" id="kp-pan" step="0.001">
+                        <label>Kd</label>
+                        <input type="number" id="kd-pan" step="0.001">
+                        
+                        <div class="pid-header">Tilt</div>
+                        <label>Kp</label>
+                        <input type="number" id="kp-tilt" step="0.001">
+                        <label>Kd</label>
+                        <input type="number" id="kd-tilt" step="0.001">
+                    </div>
+                </div>
+
+                <button onclick="saveConfig()" style="width: 100%; padding: 8px; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">Save Config</button>
+            </div>
+        </div>
+
+    <div class="controls" style="display: none;">
+        <div class="control-group">
+            <label style="width: auto; margin-right: 10px;">Auto Tracking</label>
+            <input type="checkbox" id="tracking-toggle" style="flex-grow: 0;">
+        </div>
+    </div>
+    </div>
+
+    <script>
+        const trackingToggle = document.getElementById('tracking-toggle');
+        const btnTracking = document.getElementById('btn-tracking');
+        const btnArmed = document.getElementById('btn-armed');
+        const btnFire = document.getElementById('btn-fire');
+        const invertPanCheckbox = document.getElementById('invert-pan');
+        const invertTiltCheckbox = document.getElementById('invert-tilt');
+        const kpPanInput = document.getElementById('kp-pan');
+        const kdPanInput = document.getElementById('kd-pan');
+        const kpTiltInput = document.getElementById('kp-tilt');
+        const kdTiltInput = document.getElementById('kd-tilt');
+
+        let currentPan = 90;
+        let currentTilt = 90;
+        let moveInterval = null;
+
+        // Load initial config
+        fetch('/config')
+            .then(response => response.json())
+            .then(config => {
+                invertPanCheckbox.checked = config.pan_invert;
+                invertTiltCheckbox.checked = config.tilt_invert;
+                kpPanInput.value = config.kp_pan;
+                kdPanInput.value = config.kd_pan;
+                kpTiltInput.value = config.kp_tilt;
+                kdTiltInput.value = config.kd_tilt;
+            })
+            .catch(console.error);
+
+        function saveConfig() {
+            const config = {
+                pan_invert: invertPanCheckbox.checked,
+                tilt_invert: invertTiltCheckbox.checked,
+                kp_pan: parseFloat(kpPanInput.value),
+                kd_pan: parseFloat(kdPanInput.value),
+                kp_tilt: parseFloat(kpTiltInput.value),
+                kd_tilt: parseFloat(kdTiltInput.value)
+            };
+            fetch('/config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(config),
+            })
+            .then(response => response.json())
+            .then(data => {
+                alert('Configuration saved!');
+            })
+            .catch(console.error);
+        }
+
+        // Throttle function to limit API calls
+        function throttle(func, limit) {
+            let inThrottle;
+            let lastArgs;
+            let lastContext;
+            
+            return function executedFunction(...args) {
+                if (inThrottle) {
+                    lastArgs = args;
+                    lastContext = this;
+                    return;
+                }
+                
+                func.apply(this, args);
+                inThrottle = true;
+                
+                setTimeout(() => {
+                    inThrottle = false;
+                    if (lastArgs) {
+                        executedFunction.apply(lastContext, lastArgs);
+                        lastArgs = null;
+                        lastContext = null;
+                    }
+                }, limit);
+            };
+        }
+
+        const sendServoUpdate = throttle((pan, tilt) => {
+            fetch('/control_servos', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ pan, tilt }),
+            }).catch(console.error);
+        }, 50); // 50ms throttle
+
+        function updateServos() {
+            // Disable tracking checkbox visually when moving manually
+            updateTrackingUI(false);
+            sendServoUpdate(currentPan, currentTilt);
+        }
+
+        // Arrow control logic
+        function startMove(axis, direction) {
+            if (moveInterval) return;
+            
+            // Disable tracking when manual control starts
+            if (trackingToggle.checked) {
+                setTracking(false);
+            }
+
+            const step = 2; // Degrees per tick
+            const tick = () => {
+                if (axis === 'pan') {
+                    currentPan += direction * step;
+                    currentPan = Math.max(0, Math.min(180, currentPan));
+                } else {
+                    currentTilt += direction * step;
+                    currentTilt = Math.max(0, Math.min(180, currentTilt));
+                }
+                updateServos();
+            };
+            
+            tick(); // Immediate first move
+            moveInterval = setInterval(tick, 50); // Repeat every 50ms
+        }
+
+        function stopMove() {
+            if (moveInterval) {
+                clearInterval(moveInterval);
+                moveInterval = null;
+            }
+        }
+
+        document.querySelectorAll('.turret-arrow').forEach(arrow => {
+            const axis = arrow.dataset.axis;
+            const dir = parseInt(arrow.dataset.dir);
+
+            const startHandler = (e) => {
+                e.preventDefault(); // Prevent text selection/scrolling
+                startMove(axis, dir);
+            };
+
+            const stopHandler = (e) => {
+                e.preventDefault();
+                stopMove();
+            };
+
+            arrow.addEventListener('mousedown', startHandler);
+            arrow.addEventListener('touchstart', startHandler);
+            
+            arrow.addEventListener('mouseup', stopHandler);
+            arrow.addEventListener('mouseleave', stopHandler);
+            arrow.addEventListener('touchend', stopHandler);
+            arrow.addEventListener('touchcancel', stopHandler);
+        });
+
+        function updateTrackingUI(enabled) {
+            trackingToggle.checked = enabled;
+            if (enabled) {
+                btnTracking.textContent = "Auto Tracking: ON";
+                btnTracking.classList.add('active');
+            } else {
+                btnTracking.textContent = "Auto Tracking: OFF";
+                btnTracking.classList.remove('active');
+            }
+        }
+
+        function setTracking(enabled) {
+            fetch('/set_tracking', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ enabled: enabled }),
+            })
+            .then(response => response.json())
+            .then(data => {
+                updateTrackingUI(data.enabled);
+            })
+            .catch(console.error);
+        }
+
+        btnTracking.addEventListener('click', () => {
+            setTracking(!trackingToggle.checked);
+        });
+
+        let armedTimeout;
+
+        const startArmedSequence = (e) => {
+            e.preventDefault();
+            if (armedTimeout) return;
+            
+            btnArmed.classList.add('charging');
+            
+            armedTimeout = setTimeout(() => {
+                // Toggle armed state
+                const isArmed = btnArmed.classList.contains('armed');
+                if (isArmed) {
+                     btnArmed.classList.remove('armed');
+                     btnArmed.querySelector('span').textContent = "ARMED (Hold)";
+                } else {
+                     btnArmed.classList.add('armed');
+                     btnArmed.querySelector('span').textContent = "ARMED";
+                }
+                
+                // Reset UI
+                btnArmed.classList.remove('charging');
+                armedTimeout = null;
+            }, 1000);
+        };
+
+        const cancelArmedSequence = (e) => {
+            e.preventDefault();
+            if (armedTimeout) {
+                clearTimeout(armedTimeout);
+                armedTimeout = null;
+                btnArmed.classList.remove('charging');
+            }
+        };
+
+        btnArmed.addEventListener('mousedown', startArmedSequence);
+        btnArmed.addEventListener('touchstart', startArmedSequence);
+        
+        btnArmed.addEventListener('mouseup', cancelArmedSequence);
+        btnArmed.addEventListener('mouseleave', cancelArmedSequence);
+        btnArmed.addEventListener('touchend', cancelArmedSequence);
+        btnArmed.addEventListener('touchcancel', cancelArmedSequence);
+
+        let fireTimeout;
+        
+        const startFireSequence = (e) => {
+            e.preventDefault();
+            if (fireTimeout) return;
+            
+            btnFire.classList.add('charging');
+            
+            fireTimeout = setTimeout(() => {
+                // Fire!
+                fetch('/fire', { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status !== 'ok') {
+                            alert('Error firing: ' + data.message);
+                        }
+                    })
+                    .catch(console.error);
+                
+                // Reset UI
+                btnFire.classList.remove('charging');
+                fireTimeout = null;
+            }, 1000);
+        };
+
+        const cancelFireSequence = (e) => {
+            e.preventDefault();
+            if (fireTimeout) {
+                clearTimeout(fireTimeout);
+                fireTimeout = null;
+                btnFire.classList.remove('charging');
+            }
+        };
+
+        btnFire.addEventListener('mousedown', startFireSequence);
+        btnFire.addEventListener('touchstart', startFireSequence);
+        
+        btnFire.addEventListener('mouseup', cancelFireSequence);
+        btnFire.addEventListener('mouseleave', cancelFireSequence);
+        btnFire.addEventListener('touchend', cancelFireSequence);
+        btnFire.addEventListener('touchcancel', cancelFireSequence);
+
+        trackingToggle.addEventListener('change', (e) => {
+            setTracking(e.target.checked);
+        });
+
+        function updateStats() {
+            fetch('/system_stats')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('cpu-usage').textContent = data.cpu_percent.toFixed(1);
+                    if (data.cpu_temp !== null) {
+                        document.getElementById('cpu-temp').textContent = data.cpu_temp.toFixed(1);
+                    } else {
+                        document.getElementById('cpu-temp').textContent = "--";
+                    }
+                    document.getElementById('mem-usage').textContent = data.memory_percent.toFixed(1);
+                    document.getElementById('mem-used').textContent = (data.memory_used / 1024 / 1024).toFixed(0);
+                    document.getElementById('mem-total').textContent = (data.memory_total / 1024 / 1024).toFixed(0);
+                })
+                .catch(console.error);
+        }
+
+        // Update stats every 2 seconds
+        setInterval(updateStats, 2000);
+        updateStats();
+    </script>
+</body>
+</html>

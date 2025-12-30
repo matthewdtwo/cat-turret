@@ -24,6 +24,7 @@ from cat_detector import CatDetector
 pca = None
 servo_pan = None
 servo_tilt = None
+servo_trigger = None
 
 class TurretController:
     def __init__(self):
@@ -48,7 +49,9 @@ class TurretController:
             "kp_pan": 0.02,
             "kd_pan": 0.005,
             "kp_tilt": 0.02,
-            "kd_tilt": 0.005
+            "kd_tilt": 0.005,
+            "trigger_rest_angle": 45,
+            "trigger_fire_angle": 180
         }
         try:
             if os.path.exists(self.config_file):
@@ -126,7 +129,7 @@ class TurretController:
 turret_controller = TurretController()
 
 def init_servos():
-    global pca, servo_pan, servo_tilt
+    global pca, servo_pan, servo_tilt, servo_trigger
     try:
         print("Initializing servos...")
         i2c = board.I2C()
@@ -134,9 +137,12 @@ def init_servos():
         pca.frequency = 50
         servo_pan = servo.Servo(pca.channels[0])
         servo_tilt = servo.Servo(pca.channels[1])
+        servo_trigger = servo.Servo(pca.channels[15])
+        
         # Set initial position
         servo_pan.angle = 90
         servo_tilt.angle = 90
+        servo_trigger.angle = turret_controller.config["trigger_rest_angle"]
         print("Servos initialized.")
     except Exception as e:
         print(f"Error initializing servos: {e}")
@@ -175,6 +181,7 @@ class VideoCamera:
             "--height", "480",
             "--framerate", "15",
             "--vflip",
+            "--hflip",
             "--autofocus-mode", "manual",
             "--lens-position", "0.0",
         ]
@@ -261,6 +268,8 @@ class ConfigRequest(BaseModel):
     kd_pan: float
     kp_tilt: float
     kd_tilt: float
+    trigger_rest_angle: float = 45
+    trigger_fire_angle: float = 180
 
 @app.get("/config")
 async def get_config():
@@ -270,6 +279,24 @@ async def get_config():
 async def update_config(request: ConfigRequest):
     turret_controller.save_config(request.dict())
     return {"status": "ok", "config": turret_controller.config}
+
+@app.post("/fire")
+async def fire_turret():
+    global servo_trigger
+    if servo_trigger:
+        try:
+            # Fire sequence
+            fire_angle = turret_controller.config["trigger_fire_angle"]
+            rest_angle = turret_controller.config["trigger_rest_angle"]
+            
+            servo_trigger.angle = fire_angle
+            time.sleep(0.5) # Hold for 0.5s
+            servo_trigger.angle = rest_angle
+            
+            return {"status": "ok", "message": "Fired"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    return {"status": "error", "message": "Trigger servo not initialized"}
 
 @app.post("/set_tracking")
 async def set_tracking(request: TrackingRequest):
