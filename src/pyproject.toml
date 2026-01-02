@@ -11,9 +11,11 @@ dependencies = [
     "torch>=2.9.1",
     "torchvision>=0.24.1",
     "mediapipe==0.10.14",
+    "adafruit-blinka>=8.0.0",
     "adafruit-circuitpython-pca9685>=3.4.20",
     "lgpio>=0.2.2.0",
     "adafruit-circuitpython-motor>=3.4.18",
     "psutil>=5.9.0",
+    "pylx16a>=1.1.1",
 ]
 

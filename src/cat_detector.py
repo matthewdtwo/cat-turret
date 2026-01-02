@@ -68,8 +68,10 @@ class CatDetector:
         )
         self.detector = ObjectDetector.create_from_options(options)
         self.tracker = CatTracker()
-        self.start_time = time.time()
-        self.last_detection_time = 0
+        self.start_time = time.monotonic()
+        self.last_detection_time = 0.0
+        self._timestamp_lock = threading.Lock()
+        self._last_timestamp_ms = -1
         self.prediction_timeout = 1.0 # Stop predicting after 1 second of no detection
         self.target_class = 'cat' # Default target
         self.latest_detections = []
@@ -128,7 +130,12 @@ class CatDetector:
             return None, (None, 0)
 
         # 1. Submit frame for detection (non-blocking)
-        timestamp_ms = int((time.time() - self.start_time) * 1000)
+        computed_ts = int((time.monotonic() - self.start_time) * 1000)
+        with self._timestamp_lock:
+            timestamp_ms = computed_ts
+            if timestamp_ms <= self._last_timestamp_ms:
+                timestamp_ms = self._last_timestamp_ms + 1
+            self._last_timestamp_ms = timestamp_ms
         
         if self.frame_queue.empty():
             # Use copy() to be safe against buffer reuse by OpenCV
@@ -136,6 +143,16 @@ class CatDetector:
             
         # 2. Tracking logic
         predicted_pos = self.tracker.predict()
+        
+        # Sanity check: if prediction is way off screen, reset tracker
+        if predicted_pos:
+            h, w = image.shape[:2]
+            x, y = predicted_pos
+            # If prediction is wildly out of bounds, assume lost track
+            if x < -100 or x > w + 100 or y < -100 or y > h + 100:
+                predicted_pos = None
+                self.tracker.found = False
+
         final_pos = predicted_pos
         confidence = 0
         
@@ -158,7 +175,7 @@ class CatDetector:
 
                 self.tracker.update(target_cat[0])
                 confidence = target_cat[1]
-                self.last_detection_time = time.time()
+                self.last_detection_time = time.monotonic()
                 
                 # Use the corrected state after update
                 if self.tracker.found:
@@ -168,7 +185,7 @@ class CatDetector:
             pass
         
         # Check if prediction is stale
-        if time.time() - self.last_detection_time > self.prediction_timeout:
+        if time.monotonic() - self.last_detection_time > self.prediction_timeout:
             final_pos = None
             self.tracker.found = False # Reset tracker
         

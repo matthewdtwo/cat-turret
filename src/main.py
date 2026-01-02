@@ -4,6 +4,7 @@ import os
 import threading
 import subprocess
 import time
+import asyncio
 import cv2
 import board
 import psutil
@@ -26,6 +27,78 @@ servo_pan = None
 servo_tilt = None
 servo_trigger = None
 
+
+class ServoOutput:
+    def __init__(self, rate_hz: float = 50.0):
+        self._rate_hz = rate_hz
+        self._servo_pan = None
+        self._servo_tilt = None
+        self._lock = threading.Lock()
+        self._target_pan = None
+        self._target_tilt = None
+        self._stop_event = threading.Event()
+        self._thread = None
+
+    def attach(self, servo_pan_obj, servo_tilt_obj):
+        with self._lock:
+            self._servo_pan = servo_pan_obj
+            self._servo_tilt = servo_tilt_obj
+
+    def start(self):
+        if self._thread and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=1.0)
+
+    def is_ready(self) -> bool:
+        with self._lock:
+            return self._servo_pan is not None and self._servo_tilt is not None
+
+    def set_target(self, pan: float, tilt: float):
+        with self._lock:
+            self._target_pan = float(pan)
+            self._target_tilt = float(tilt)
+
+    def _run(self):
+        period = 1.0 / max(1e-6, float(self._rate_hz))
+        next_deadline = time.monotonic()
+        last_pan = None
+        last_tilt = None
+
+        while not self._stop_event.is_set():
+            with self._lock:
+                servo_pan_obj = self._servo_pan
+                servo_tilt_obj = self._servo_tilt
+                target_pan = self._target_pan
+                target_tilt = self._target_tilt
+
+            if servo_pan_obj is not None and servo_tilt_obj is not None:
+                try:
+                    if target_pan is not None and target_pan != last_pan:
+                        servo_pan_obj.angle = target_pan
+                        last_pan = target_pan
+                    if target_tilt is not None and target_tilt != last_tilt:
+                        servo_tilt_obj.angle = target_tilt
+                        last_tilt = target_tilt
+                except Exception:
+                    pass
+
+            next_deadline += period
+            sleep_for = next_deadline - time.monotonic()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            else:
+                next_deadline = time.monotonic()
+
+
+servo_output = ServoOutput(rate_hz=60.0)
+
 class TurretController:
     def __init__(self):
         self.config_file = os.path.join(os.path.dirname(__file__), "turret_config.json")
@@ -33,14 +106,21 @@ class TurretController:
         
         self.pan_angle = 90.0
         self.tilt_angle = 90.0
-        self.tracking_enabled = False
         self.center_x = 320
         self.center_y = 240
         self.deadzone = 40
+        self.calibration_mode = False
         
         # State for PID
         self.prev_error_x = 0
         self.prev_error_y = 0
+        
+        # State for Search/Return
+        self.state = "IDLE" # IDLE, TRACKING, SEARCHING, RETURNING
+        self.search_vel_pan = 0
+        self.search_vel_tilt = 0
+        self.last_pan = 90
+        self.last_tilt = 90
 
     def load_config(self):
         defaults = {
@@ -50,8 +130,16 @@ class TurretController:
             "kd_pan": 0.005,
             "kp_tilt": 0.02,
             "kd_tilt": 0.005,
+            "pan_min": 0,
+            "pan_max": 180,
+            "tilt_min": 0,
+            "tilt_max": 180,
+            "home_pan": 90,
+            "home_tilt": 90,
             "trigger_rest_angle": 45,
-            "trigger_fire_angle": 180
+            "trigger_fire_angle": 180,
+            "tracking_enabled": False,
+            "armed": False
         }
         try:
             if os.path.exists(self.config_file):
@@ -63,68 +151,129 @@ class TurretController:
             print(f"Error loading config: {e}")
             self.config = defaults
 
-    def save_config(self, new_config):
+    def save_config(self, new_config=None):
         try:
-            self.config.update(new_config)
+            if new_config:
+                self.config.update(new_config)
             with open(self.config_file, 'w') as f:
                 json.dump(self.config, f, indent=4)
         except Exception as e:
             print(f"Error saving config: {e}")
 
     def update(self, target_pos):
-        global servo_pan, servo_tilt
-        if not self.tracking_enabled or target_pos is None:
-            # Reset PID state when not tracking
-            self.prev_error_x = 0
-            self.prev_error_y = 0
-            return
+        tracking_enabled = self.config.get("tracking_enabled", False)
 
-        x, y = target_pos
-        
-        # Calculate error
-        # Camera X: 0 (Left) -> 640 (Right)
-        # Camera Y: 0 (Top) -> 480 (Bottom)
-        
-        # Error > 0 means target is to the Left/Top of center
-        error_x = self.center_x - x 
-        error_y = self.center_y - y 
+        if not tracking_enabled:
+            # Reset PID state when not tracking, unless returning home
+            if self.state != "RETURNING":
+                self.prev_error_x = 0
+                self.prev_error_y = 0
+                self.state = "IDLE"
+                return
 
-        # Update Pan
-        if abs(error_x) > self.deadzone:
-            p_term = error_x * self.config["kp_pan"]
-            d_term = (error_x - self.prev_error_x) * self.config["kd_pan"]
-            delta = p_term + d_term
+        if tracking_enabled and target_pos:
+            self.state = "TRACKING"
+            x, y = target_pos
             
-            if self.config["pan_invert"]:
-                delta = -delta
-            self.pan_angle += delta
-            self.pan_angle = max(0, min(180, self.pan_angle))
-            if servo_pan:
-                servo_pan.angle = self.pan_angle
-        self.prev_error_x = error_x
-
-        # Update Tilt
-        if abs(error_y) > self.deadzone:
-            p_term = error_y * self.config["kp_tilt"]
-            d_term = (error_y - self.prev_error_y) * self.config["kd_tilt"]
-            delta = p_term + d_term
+            # Safety check for extreme values (assuming 640x480 resolution with some margin)
+            if not (-200 < x < 840) or not (-200 < y < 680):
+                return
             
-            if self.config["tilt_invert"]:
-                delta = -delta
-            self.tilt_angle += delta
-            self.tilt_angle = max(0, min(180, self.tilt_angle))
-            if servo_tilt:
-                servo_tilt.angle = self.tilt_angle
-        self.prev_error_y = error_y
+            # Calculate error
+            # Camera X: 0 (Left) -> 640 (Right)
+            # Camera Y: 0 (Top) -> 480 (Bottom)
+            
+            # Error > 0 means target is to the Left/Top of center
+            error_x = self.center_x - x 
+            error_y = self.center_y - y 
+
+            # Update Pan
+            if abs(error_x) > self.deadzone:
+                p_term = error_x * self.config["kp_pan"]
+                d_term = (error_x - self.prev_error_x) * self.config["kd_pan"]
+                delta = p_term + d_term
+                
+                if self.config["pan_invert"]:
+                    delta = -delta
+                self.pan_angle += delta
+                self.pan_angle = max(self.config["pan_min"], min(self.config["pan_max"], self.pan_angle))
+            self.prev_error_x = error_x
+
+            # Update Tilt
+            if abs(error_y) > self.deadzone:
+                p_term = error_y * self.config["kp_tilt"]
+                d_term = (error_y - self.prev_error_y) * self.config["kd_tilt"]
+                delta = p_term + d_term
+                
+                if self.config["tilt_invert"]:
+                    delta = -delta
+                self.tilt_angle += delta
+                self.tilt_angle = max(self.config["tilt_min"], min(self.config["tilt_max"], self.tilt_angle))
+            self.prev_error_y = error_y
+
+            if servo_output.is_ready():
+                servo_output.set_target(self.pan_angle, self.tilt_angle)
+            
+            # Update velocity estimate
+            curr_vel_pan = self.pan_angle - self.last_pan
+            curr_vel_tilt = self.tilt_angle - self.last_tilt
+            alpha = 0.2
+            self.search_vel_pan = (1 - alpha) * self.search_vel_pan + alpha * curr_vel_pan
+            self.search_vel_tilt = (1 - alpha) * self.search_vel_tilt + alpha * curr_vel_tilt
+            self.last_pan = self.pan_angle
+            self.last_tilt = self.tilt_angle
+            
+        else:
+            # Lost tracking logic
+            if self.state == "TRACKING":
+                self.state = "SEARCHING"
+                # If velocity is negligible, skip search
+                if abs(self.search_vel_pan) < 0.05 and abs(self.search_vel_tilt) < 0.05:
+                    self.state = "RETURNING"
+            
+            if self.state == "SEARCHING":
+                self.pan_angle += self.search_vel_pan
+                self.tilt_angle += self.search_vel_tilt
+                
+                pan_min = self.config["pan_min"]
+                pan_max = self.config["pan_max"]
+                tilt_min = self.config["tilt_min"]
+                tilt_max = self.config["tilt_max"]
+                
+                hit_limit = False
+                if self.pan_angle <= pan_min or self.pan_angle >= pan_max: hit_limit = True
+                if self.tilt_angle <= tilt_min or self.tilt_angle >= tilt_max: hit_limit = True
+                
+                self.pan_angle = max(pan_min, min(pan_max, self.pan_angle))
+                self.tilt_angle = max(tilt_min, min(tilt_max, self.tilt_angle))
+
+                if servo_output.is_ready():
+                    servo_output.set_target(self.pan_angle, self.tilt_angle)
+                
+                if hit_limit:
+                    self.state = "RETURNING"
+            
+            elif self.state == "RETURNING":
+                pan_target = self.config.get("home_pan", 90)
+                tilt_target = self.config.get("home_tilt", 90)
+                speed = 0.2
+                
+                if abs(self.pan_angle - pan_target) > speed:
+                    self.pan_angle += speed if pan_target > self.pan_angle else -speed
+                if abs(self.tilt_angle - tilt_target) > speed:
+                    self.tilt_angle += speed if tilt_target > self.tilt_angle else -speed
+
+                if servo_output.is_ready():
+                    servo_output.set_target(self.pan_angle, self.tilt_angle)
+                
+                if abs(self.pan_angle - pan_target) < 1 and abs(self.tilt_angle - tilt_target) < 1:
+                    self.state = "IDLE"
 
     def set_manual(self, pan, tilt):
-        global servo_pan, servo_tilt
         self.pan_angle = pan
         self.tilt_angle = tilt
-        if servo_pan:
-            servo_pan.angle = self.pan_angle
-        if servo_tilt:
-            servo_tilt.angle = self.tilt_angle
+        if servo_output.is_ready():
+            servo_output.set_target(self.pan_angle, self.tilt_angle)
 
 turret_controller = TurretController()
 
@@ -140,23 +289,37 @@ def init_servos():
         servo_trigger = servo.Servo(pca.channels[15])
         
         # Set initial position
-        servo_pan.angle = 90
-        servo_tilt.angle = 90
+        servo_output.attach(servo_pan, servo_tilt)
+        servo_output.start()
+        servo_output.set_target(90, 90)
         servo_trigger.angle = turret_controller.config["trigger_rest_angle"]
         print("Servos initialized.")
     except Exception as e:
         print(f"Error initializing servos: {e}")
 
 def deinit_servos():
-    global pca
+    global pca, servo_pan, servo_tilt
     if pca:
+        print("Centering servos...")
+        try:
+            if servo_output.is_ready():
+                servo_output.set_target(
+                    turret_controller.config.get("home_pan", 90),
+                    turret_controller.config.get("home_tilt", 90),
+                )
+            time.sleep(0.5)
+        except Exception as e:
+            print(f"Error centering servos: {e}")
+
         print("Deinitializing servos...")
+        servo_output.stop()
         pca.deinit()
 
 class VideoCamera:
     def __init__(self):
         self.frame = None
         self.raw_frame = None
+        self.preview_jpeg = None
         self.capture_time = 0
         self.condition = threading.Condition()
         self.running = False
@@ -175,11 +338,11 @@ class VideoCamera:
             "-t", "0",
             "--inline",
             "--listen",
-            "-o", "tcp://127.0.0.1:8888",
+            "-o", "tcp://0.0.0.0:8888",
             "--codec", "mjpeg",
             "--width", "640",
             "--height", "480",
-            "--framerate", "15",
+            "--framerate", "25",
             "--vflip",
             "--hflip",
             "--autofocus-mode", "manual",
@@ -221,14 +384,27 @@ class VideoCamera:
             if self.camera and self.camera.isOpened():
                 success, frame = self.camera.read()
                 if success:
-                    capture_time = time.time()
-                    ret, buffer = cv2.imencode('.jpg', frame)
-                    if ret:
-                        with self.condition:
-                            self.frame = buffer.tobytes()
-                            self.raw_frame = frame
-                            self.capture_time = capture_time
-                            self.condition.notify_all()
+                    capture_time = time.monotonic()
+
+                    preview_jpeg = None
+                    try:
+                        preview = cv2.resize(frame, (320, 240), interpolation=cv2.INTER_AREA)
+                        ret, buffer = cv2.imencode(
+                            '.jpg',
+                            preview,
+                            [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+                        )
+                        if ret:
+                            preview_jpeg = buffer.tobytes()
+                    except Exception:
+                        preview_jpeg = None
+
+                    with self.condition:
+                        self.raw_frame = frame
+                        self.capture_time = capture_time
+                        if preview_jpeg is not None:
+                            self.preview_jpeg = preview_jpeg
+                        self.condition.notify_all()
                 else:
                     print("Error: Failed to read frame from stream.")
                     break
@@ -263,8 +439,15 @@ class ServoRequest(BaseModel):
 class TrackingRequest(BaseModel):
     enabled: bool
 
+class ArmedRequest(BaseModel):
+    enabled: bool
+
 class DetectionTargetRequest(BaseModel):
     target: str
+
+class SetLimitRequest(BaseModel):
+    axis: str
+    limit: str
 
 class ConfigRequest(BaseModel):
     pan_invert: bool
@@ -273,6 +456,10 @@ class ConfigRequest(BaseModel):
     kd_pan: float
     kp_tilt: float
     kd_tilt: float
+    pan_min: int = 0
+    pan_max: int = 180
+    tilt_min: int = 0
+    tilt_max: int = 180
     trigger_rest_angle: float = 45
     trigger_fire_angle: float = 180
 
@@ -288,6 +475,9 @@ async def update_config(request: ConfigRequest):
 @app.post("/fire")
 async def fire_turret():
     global servo_trigger
+    if not turret_controller.config.get("armed", False):
+        return {"status": "error", "message": "Turret is not armed"}
+
     if servo_trigger:
         try:
             # Fire sequence
@@ -295,7 +485,7 @@ async def fire_turret():
             rest_angle = turret_controller.config["trigger_rest_angle"]
             
             servo_trigger.angle = fire_angle
-            time.sleep(0.5) # Hold for 0.5s
+            await asyncio.sleep(0.5)
             servo_trigger.angle = rest_angle
             
             return {"status": "ok", "message": "Fired"}
@@ -305,8 +495,13 @@ async def fire_turret():
 
 @app.post("/set_tracking")
 async def set_tracking(request: TrackingRequest):
-    turret_controller.tracking_enabled = request.enabled
-    return {"status": "ok", "enabled": turret_controller.tracking_enabled}
+    turret_controller.save_config({"tracking_enabled": request.enabled})
+    return {"status": "ok", "enabled": turret_controller.config["tracking_enabled"]}
+
+@app.post("/set_armed")
+async def set_armed(request: ArmedRequest):
+    turret_controller.save_config({"armed": request.enabled})
+    return {"status": "ok", "enabled": turret_controller.config["armed"]}
 
 @app.post("/set_detection_target")
 async def set_detection_target(request: DetectionTargetRequest):
@@ -316,17 +511,128 @@ async def set_detection_target(request: DetectionTargetRequest):
         return {"status": "ok", "target": detector.target_class}
     return {"status": "error", "message": "Detector not initialized"}
 
+@app.post("/calibration/start")
+async def start_calibration():
+    turret_controller.calibration_mode = True
+    return {"status": "ok", "mode": "calibration"}
+
+@app.post("/calibration/stop")
+async def stop_calibration():
+    turret_controller.calibration_mode = False
+    turret_controller.save_config()
+    return {"status": "ok", "mode": "normal", "config": turret_controller.config}
+
+@app.post("/calibration/set_limit")
+async def set_limit(request: SetLimitRequest):
+    if not turret_controller.calibration_mode:
+        return {"status": "error", "message": "Not in calibration mode"}
+    
+    if request.axis == "pan":
+        val = int(turret_controller.pan_angle)
+        if request.limit == "min":
+            turret_controller.config["pan_min"] = val
+        elif request.limit == "max":
+            turret_controller.config["pan_max"] = val
+    elif request.axis == "tilt":
+        val = int(turret_controller.tilt_angle)
+        if request.limit == "min":
+            turret_controller.config["tilt_min"] = val
+        elif request.limit == "max":
+            turret_controller.config["tilt_max"] = val
+            
+    return {"status": "ok", "config": turret_controller.config}
+
+@app.post("/set_home")
+async def set_home():
+    turret_controller.config["home_pan"] = turret_controller.pan_angle
+    turret_controller.config["home_tilt"] = turret_controller.tilt_angle
+    turret_controller.save_config()
+    return {"status": "ok", "config": turret_controller.config}
+
+@app.post("/go_home")
+async def go_home():
+    # Disable tracking
+    turret_controller.save_config({"tracking_enabled": False})
+    
+    # Set state to RETURNING to smoothly move home
+    turret_controller.state = "RETURNING"
+    
+    return {"status": "ok", "message": "Returning home"}
+
+def test_range_sequence():
+    global servo_pan, servo_tilt
+    
+    # Disable tracking
+    turret_controller.tracking_enabled = False
+    turret_controller.save_config({"tracking_enabled": False})
+    
+    pan_min = turret_controller.config["pan_min"]
+    pan_max = turret_controller.config["pan_max"]
+    tilt_min = turret_controller.config["tilt_min"]
+    tilt_max = turret_controller.config["tilt_max"]
+    
+    center_pan = (pan_min + pan_max) / 2
+    center_tilt = (tilt_min + tilt_max) / 2
+    
+    # Helper for smooth movement
+    def move_servo_smooth(servo, target_angle, current_angle):
+        if servo is None: return target_angle
+        
+        step = 1 if target_angle > current_angle else -1
+        start = int(current_angle)
+        end = int(target_angle)
+        
+        if start == end: return target_angle
+        
+        stop_val = end + 1 if step > 0 else end - 1
+        
+        for angle in range(start, stop_val, step):
+            servo.angle = angle
+            time.sleep(0.015) 
+        return target_angle
+
+    # Current positions
+    curr_pan = turret_controller.pan_angle
+    curr_tilt = turret_controller.tilt_angle
+
+    # Pan Sequence
+    curr_pan = move_servo_smooth(servo_pan, pan_min, curr_pan)
+    time.sleep(0.2)
+    curr_pan = move_servo_smooth(servo_pan, pan_max, curr_pan)
+    time.sleep(0.2)
+    curr_pan = move_servo_smooth(servo_pan, center_pan, curr_pan)
+    
+    # Tilt Sequence
+    curr_tilt = move_servo_smooth(servo_tilt, tilt_min, curr_tilt)
+    time.sleep(0.2)
+    curr_tilt = move_servo_smooth(servo_tilt, tilt_max, curr_tilt)
+    time.sleep(0.2)
+    curr_tilt = move_servo_smooth(servo_tilt, center_tilt, curr_tilt)
+
+    # Update controller state
+    turret_controller.pan_angle = curr_pan
+    turret_controller.tilt_angle = curr_tilt
+
+@app.post("/test_range")
+async def test_range_endpoint():
+    threading.Thread(target=test_range_sequence).start()
+    return {"status": "ok", "message": "Range test started"}
+
 @app.post("/control_servos")
 async def control_servos(request: ServoRequest):
-    global servo_pan, servo_tilt
-    if servo_pan and servo_tilt:
+    if servo_output.is_ready():
         try:
             # Clamp values
-            pan = max(0, min(180, request.pan))
-            tilt = max(0, min(180, request.tilt))
+            if turret_controller.calibration_mode:
+                pan = max(0, min(180, request.pan))
+                tilt = max(0, min(180, request.tilt))
+            else:
+                pan = max(turret_controller.config["pan_min"], min(turret_controller.config["pan_max"], request.pan))
+                tilt = max(turret_controller.config["tilt_min"], min(turret_controller.config["tilt_max"], request.tilt))
             
             # Disable tracking when manual control is used
-            turret_controller.tracking_enabled = False
+            if turret_controller.config.get("tracking_enabled", False):
+                turret_controller.save_config({"tracking_enabled": False})
             turret_controller.set_manual(pan, tilt)
             
             return {"status": "ok", "pan": pan, "tilt": tilt}
@@ -360,7 +666,11 @@ async def system_stats():
         "memory_percent": psutil.virtual_memory().percent,
         "memory_used": psutil.virtual_memory().used,
         "memory_total": psutil.virtual_memory().total,
-        "cpu_temp": cpu_temp
+        "cpu_temp": cpu_temp,
+        "tracking_enabled": turret_controller.config.get("tracking_enabled", False),
+        "armed": turret_controller.config.get("armed", False),
+        "current_pan": turret_controller.pan_angle,
+        "current_tilt": turret_controller.tilt_angle
     }
 
 
@@ -418,35 +728,19 @@ class TargetingSystem:
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
 def get_camera_frame():
-    fps_start_time = time.time()
-    fps_counter = 0
-    fps = 0
-    
     while True:
         with camera.condition:
             camera.condition.wait()
-            raw_frame = camera.raw_frame
+            preview_jpeg = camera.preview_jpeg
         
-        if raw_frame is not None:
-            # Calculate FPS
-            fps_counter += 1
-            now = time.time()
-            if now - fps_start_time > 1.0:
-                fps = fps_counter / (now - fps_start_time)
-                fps_counter = 0
-                fps_start_time = now
-            
-            # Draw FPS
-            display_frame = raw_frame.copy()
-            cv2.putText(display_frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-            
-            ret, buffer = cv2.imencode('.jpg', display_frame)
-            if ret:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+        if preview_jpeg is not None:
+            yield (
+                b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' + preview_jpeg + b'\r\n'
+            )
 
 def get_processed_frame():
-    fps_start_time = time.time()
+    fps_start_time = time.monotonic()
     fps_counter = 0
     fps = 0
     targeting_system = TargetingSystem()
@@ -461,11 +755,10 @@ def get_processed_frame():
             annotated_image, (cat_pos, confidence) = detector.detect(raw_frame)
             
             # Update turret controller
-            if cat_pos:
-                turret_controller.update(cat_pos)
+            turret_controller.update(cat_pos)
 
             # Update targeting system
-            now = time.time()
+            now = time.monotonic()
             targeting_system.update(confidence > 0, now)
 
             if annotated_image is not None:
@@ -481,13 +774,27 @@ def get_processed_frame():
                     fps_start_time = now
                 
                 # Calculate Latency
-                latency_ms = (now - capture_time) * 1000
+                latency_ms = 0.0
+                if capture_time:
+                    latency_ms = max(0.0, (now - capture_time) * 1000)
                 
                 # Draw FPS and Latency
                 cv2.putText(annotated_image, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 cv2.putText(annotated_image, f"Lat: {latency_ms:.0f}ms", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
                 
-                ret, buffer = cv2.imencode('.jpg', annotated_image)
+                # Draw State
+                state_color = (0, 255, 0)
+                if turret_controller.state == "SEARCHING": state_color = (0, 255, 255)
+                elif turret_controller.state == "RETURNING": state_color = (0, 165, 255)
+                elif turret_controller.state == "IDLE": state_color = (200, 200, 200)
+                
+                cv2.putText(annotated_image, f"State: {turret_controller.state}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, state_color, 2)
+                
+                ret, buffer = cv2.imencode(
+                    '.jpg',
+                    annotated_image,
+                    [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+                )
                 if ret:
                     frame_bytes = buffer.tobytes()
                     yield (b'--frame\r\n'

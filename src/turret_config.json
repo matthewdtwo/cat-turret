@@ -1,10 +1,18 @@
 {
-    "pan_invert": true,
-    "tilt_invert": true,
-    "kp_pan": 0.025,
-    "kd_pan": 0.008,
+    "pan_invert": false,
+    "tilt_invert": false,
+    "kp_pan": 0.01,
+    "kd_pan": 0.01,
     "kp_tilt": 0.01,
     "kd_tilt": 0.008,
+    "pan_min": 54,
+    "pan_max": 128,
+    "tilt_min": 98,
+    "tilt_max": 164,
+    "home_pan": 90.14507665065494,
+    "home_tilt": 90.99999999999953,
     "trigger_rest_angle": 45,
-    "trigger_fire_angle": 180
+    "trigger_fire_angle": 180,
+    "tracking_enabled": false,
+    "armed": false
 }

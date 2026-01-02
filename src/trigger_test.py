@@ -20,7 +20,7 @@ def main():
 
     # Start at 90 degrees
     print("Setting initial position to 90 degrees...")
-    trigger_servo.angle = 90
+    # trigger_servo.angle = 90
 
     print("Waiting for 5 seconds...")
     time.sleep(5)
@@ -33,8 +33,8 @@ def main():
             trigger_servo.angle = 45
             time.sleep(0.5)
             
-            print(f"Iteration {i + 1}: Moving to 180 degrees...")
-            trigger_servo.angle = 180
+            print(f"Iteration {i + 1}: Moving to 100 degrees...")
+            trigger_servo.angle = 100
             time.sleep(0.5)
             
         print("Test sequence complete.")
