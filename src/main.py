@@ -9,8 +9,7 @@ import cv2
 import board
 import psutil
 import json
-from adafruit_motor import servo
-from adafruit_pca9685 import PCA9685
+from pylx16a.lx16a import LX16A, ServoTimeoutError
 from pydantic import BaseModel
 
 
@@ -81,10 +80,10 @@ class ServoOutput:
             if servo_pan_obj is not None and servo_tilt_obj is not None:
                 try:
                     if target_pan is not None and target_pan != last_pan:
-                        servo_pan_obj.angle = target_pan
+                        servo_pan_obj.move(target_pan)
                         last_pan = target_pan
                     if target_tilt is not None and target_tilt != last_tilt:
-                        servo_tilt_obj.angle = target_tilt
+                        servo_tilt_obj.move(target_tilt)
                         last_tilt = target_tilt
                 except Exception:
                     pass
@@ -123,6 +122,18 @@ class TurretController:
         self.last_tilt = 90
 
     def load_config(self):
+        def map_range(x, in_min=0, in_max=1000, out_min=0, out_max=240):
+            return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min
+
+        # Limits from serial_bus_servo_control.py
+        # Pan: 110 (anticlockwise) to 863 (clockwise)
+        pan_min_deg = map_range(110)
+        pan_max_deg = map_range(863)
+        
+        # Tilt: 595 (down) to 836 (up)
+        tilt_min_deg = map_range(595)
+        tilt_max_deg = map_range(836)
+
         defaults = {
             "pan_invert": False,
             "tilt_invert": False,
@@ -130,12 +141,12 @@ class TurretController:
             "kd_pan": 0.005,
             "kp_tilt": 0.02,
             "kd_tilt": 0.005,
-            "pan_min": 0,
-            "pan_max": 180,
-            "tilt_min": 0,
-            "tilt_max": 180,
-            "home_pan": 90,
-            "home_tilt": 90,
+            "pan_min": pan_min_deg,
+            "pan_max": pan_max_deg,
+            "tilt_min": tilt_min_deg,
+            "tilt_max": tilt_max_deg,
+            "home_pan": (pan_min_deg + pan_max_deg) / 2,
+            "home_tilt": (tilt_min_deg + tilt_max_deg) / 2,
             "trigger_rest_angle": 45,
             "trigger_fire_angle": 180,
             "tracking_enabled": False,
@@ -281,39 +292,48 @@ def init_servos():
     global pca, servo_pan, servo_tilt, servo_trigger
     try:
         print("Initializing servos...")
-        i2c = board.I2C()
-        pca = PCA9685(i2c)
-        pca.frequency = 50
-        servo_pan = servo.Servo(pca.channels[0])
-        servo_tilt = servo.Servo(pca.channels[1])
-        servo_trigger = servo.Servo(pca.channels[15])
+        LX16A.initialize("/dev/ttyUSB0")
+        
+        try:
+            servo_pan = LX16A(1)
+            servo_tilt = LX16A(2)
+            servo_pan.servo_mode()
+            servo_tilt.servo_mode()
+        except ServoTimeoutError as e:
+            print(f"Servo {e.id_} is not responding.")
+            return
+
+        # Trigger servo not yet supported on serial bus
+        servo_trigger = None
         
         # Set initial position
         servo_output.attach(servo_pan, servo_tilt)
         servo_output.start()
-        servo_output.set_target(90, 90)
-        servo_trigger.angle = turret_controller.config["trigger_rest_angle"]
+        
+        # Move to home position
+        home_pan = turret_controller.config.get("home_pan", 90)
+        home_tilt = turret_controller.config.get("home_tilt", 90)
+        servo_output.set_target(home_pan, home_tilt)
+        
         print("Servos initialized.")
     except Exception as e:
         print(f"Error initializing servos: {e}")
 
 def deinit_servos():
     global pca, servo_pan, servo_tilt
-    if pca:
-        print("Centering servos...")
-        try:
-            if servo_output.is_ready():
-                servo_output.set_target(
-                    turret_controller.config.get("home_pan", 90),
-                    turret_controller.config.get("home_tilt", 90),
-                )
-            time.sleep(0.5)
-        except Exception as e:
-            print(f"Error centering servos: {e}")
+    print("Centering servos...")
+    try:
+        if servo_output.is_ready():
+            servo_output.set_target(
+                turret_controller.config.get("home_pan", 90),
+                turret_controller.config.get("home_tilt", 90),
+            )
+        time.sleep(0.5)
+    except Exception as e:
+        print(f"Error centering servos: {e}")
 
-        print("Deinitializing servos...")
-        servo_output.stop()
-        pca.deinit()
+    print("Deinitializing servos...")
+    servo_output.stop()
 
 class VideoCamera:
     def __init__(self):
@@ -457,9 +477,9 @@ class ConfigRequest(BaseModel):
     kp_tilt: float
     kd_tilt: float
     pan_min: int = 0
-    pan_max: int = 180
+    pan_max: int = 240
     tilt_min: int = 0
-    tilt_max: int = 180
+    tilt_max: int = 240
     trigger_rest_angle: float = 45
     trigger_fire_angle: float = 180
 
@@ -587,7 +607,7 @@ def test_range_sequence():
         stop_val = end + 1 if step > 0 else end - 1
         
         for angle in range(start, stop_val, step):
-            servo.angle = angle
+            servo.move(angle)
             time.sleep(0.015) 
         return target_angle
 
@@ -624,8 +644,8 @@ async def control_servos(request: ServoRequest):
         try:
             # Clamp values
             if turret_controller.calibration_mode:
-                pan = max(0, min(180, request.pan))
-                tilt = max(0, min(180, request.tilt))
+                pan = max(0, min(240, request.pan))
+                tilt = max(0, min(240, request.tilt))
             else:
                 pan = max(turret_controller.config["pan_min"], min(turret_controller.config["pan_max"], request.pan))
                 tilt = max(turret_controller.config["tilt_min"], min(turret_controller.config["tilt_max"], request.tilt))

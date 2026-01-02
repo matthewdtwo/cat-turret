@@ -361,32 +361,32 @@
                     <div class="control-group">
                         <label style="width: 100%;">
                             Pan Range:
-                            <span id="pan-range-val">0 - 180</span>
+                            <span id="pan-range-val">0 - 240</span>
                             &nbsp;|&nbsp;
                             Min: <span id="pan-min-label">0</span>
                             &nbsp;|&nbsp;
                             Current: <span id="pan-current-label">--</span>
                             &nbsp;|&nbsp;
-                            Max: <span id="pan-max-label">180</span>
+                            Max: <span id="pan-max-label">240</span>
                         </label>
-                        <input type="range" id="pan-min" min="0" max="180" value="0">
-                        <input type="range" id="pan-current" class="pos-indicator" min="0" max="180" value="90" disabled>
-                        <input type="range" id="pan-max" min="0" max="180" value="180">
+                        <input type="range" id="pan-min" min="0" max="240" value="0">
+                        <input type="range" id="pan-current" class="pos-indicator" min="0" max="240" value="90" disabled>
+                        <input type="range" id="pan-max" min="0" max="240" value="240">
                     </div>
                     <div class="control-group">
                         <label style="width: 100%;">
                             Tilt Range:
-                            <span id="tilt-range-val">0 - 180</span>
+                            <span id="tilt-range-val">0 - 240</span>
                             &nbsp;|&nbsp;
                             Min: <span id="tilt-min-label">0</span>
                             &nbsp;|&nbsp;
                             Current: <span id="tilt-current-label">--</span>
                             &nbsp;|&nbsp;
-                            Max: <span id="tilt-max-label">180</span>
+                            Max: <span id="tilt-max-label">240</span>
                         </label>
-                        <input type="range" id="tilt-min" min="0" max="180" value="0">
-                        <input type="range" id="tilt-current" class="pos-indicator" min="0" max="180" value="90" disabled>
-                        <input type="range" id="tilt-max" min="0" max="180" value="180">
+                        <input type="range" id="tilt-min" min="0" max="240" value="0">
+                        <input type="range" id="tilt-current" class="pos-indicator" min="0" max="240" value="90" disabled>
+                        <input type="range" id="tilt-max" min="0" max="240" value="240">
                     </div>
                 </div>
 
@@ -435,7 +435,7 @@
         let currentTilt = 90;
         let moveInterval = null;
         let currentTarget = 'cat';
-        let configLimits = { pan_min: 0, pan_max: 180, tilt_min: 0, tilt_max: 180 };
+        let configLimits = { pan_min: 0, pan_max: 240, tilt_min: 0, tilt_max: 240 };
         let isCalibrating = false;
 
         function updateDetectUI(target) {
@@ -452,7 +452,7 @@
                         calibrationControls.style.display = 'block';
                         btnStartCal.style.display = 'none';
                         // Unlock limits locally
-                        configLimits = { pan_min: 0, pan_max: 180, tilt_min: 0, tilt_max: 180 };
+                        configLimits = { pan_min: 0, pan_max: 240, tilt_min: 0, tilt_max: 240 };
                     }
                 });
         }
@@ -552,8 +552,8 @@
         }
 
         function updatePositionIndicators() {
-            const panVal = clamp(Math.round(currentPan), 0, 180);
-            const tiltVal = clamp(Math.round(currentTilt), 0, 180);
+            const panVal = clamp(Math.round(currentPan), 0, 240);
+            const tiltVal = clamp(Math.round(currentTilt), 0, 240);
 
             panCurrentInput.value = panVal;
             tiltCurrentInput.value = tiltVal;
@@ -574,9 +574,9 @@
             kdTiltInput.value = config.kd_tilt;
             
             panMinInput.value = config.pan_min !== undefined ? config.pan_min : 0;
-            panMaxInput.value = config.pan_max !== undefined ? config.pan_max : 180;
+            panMaxInput.value = config.pan_max !== undefined ? config.pan_max : 240;
             tiltMinInput.value = config.tilt_min !== undefined ? config.tilt_min : 0;
-            tiltMaxInput.value = config.tilt_max !== undefined ? config.tilt_max : 180;
+            tiltMaxInput.value = config.tilt_max !== undefined ? config.tilt_max : 240;
             
             configLimits.pan_min = parseInt(panMinInput.value);
             configLimits.pan_max = parseInt(panMaxInput.value);
@@ -689,14 +689,14 @@
                 if (axis === 'pan') {
                     currentPan += effectiveDirection * step;
                     if (isCalibrating) {
-                        currentPan = Math.max(0, Math.min(180, currentPan));
+                        currentPan = Math.max(0, Math.min(240, currentPan));
                     } else {
                         currentPan = Math.max(configLimits.pan_min, Math.min(configLimits.pan_max, currentPan));
                     }
                 } else {
                     currentTilt += effectiveDirection * step;
                     if (isCalibrating) {
-                        currentTilt = Math.max(0, Math.min(180, currentTilt));
+                        currentTilt = Math.max(0, Math.min(240, currentTilt));
                     } else {
                         currentTilt = Math.max(configLimits.tilt_min, Math.min(configLimits.tilt_max, currentTilt));
                     }

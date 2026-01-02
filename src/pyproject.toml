@@ -17,5 +17,6 @@ dependencies = [
     "adafruit-circuitpython-motor>=3.4.18",
     "psutil>=5.9.0",
     "pylx16a>=1.1.1",
+    "pillow>=12.0.0",
 ]
 
