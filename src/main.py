@@ -523,29 +523,13 @@ class ProcessingThread:
                     if cat_pos:
                         targeting_system.draw(annotated_image, cat_pos, now)
 
-                    # Calculate FPS
-                    fps_counter += 1
-                    if now - fps_start_time > 1.0:
-                        fps = fps_counter / (now - fps_start_time)
-                        fps_counter = 0
-                        fps_start_time = now
-
-                    # Calculate Latency
-                    latency_ms = 0.0
-                    if capture_time:
-                        latency_ms = max(0.0, (now - capture_time) * 1000)
-
-                    # Draw FPS and Latency
-                    cv2.putText(annotated_image, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    cv2.putText(annotated_image, f"Lat: {latency_ms:.0f}ms", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-
                     # Draw State
                     state_color = (0, 255, 0)
                     if self.controller.state == "SEARCHING": state_color = (0, 255, 255)
                     elif self.controller.state == "RETURNING": state_color = (0, 165, 255)
                     elif self.controller.state == "IDLE": state_color = (200, 200, 200)
                     
-                    cv2.putText(annotated_image, f"State: {self.controller.state}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, state_color, 2)
+                    cv2.putText(annotated_image, f"State: {self.controller.state}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, state_color, 2)
 
                     # Encode for streaming (only if needed? No, we need it for the generator)
                     # Optimization: Only encode if someone is watching? 

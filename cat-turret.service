@@ -1,0 +1,15 @@
+[Unit]
+Description=Cat Turret Control Server
+After=network.target video.target
+
+[Service]
+Type=simple
+User=matthew
+WorkingDirectory=/home/matthew/cat-turret/src
+ExecStart=/home/matthew/.local/bin/uv run main.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
