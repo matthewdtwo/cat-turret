@@ -3,6 +3,10 @@ from adafruit_motor import servo
 from adafruit_pca9685 import PCA9685
 import time
 
+servo_min = 45
+servo_max = 140
+
+
 def main():
     print("Initializing PCA9685 for Trigger Test...")
     try:
@@ -30,16 +34,16 @@ def main():
     try:
         for i in range(3):
             print(f"Iteration {i + 1}: Moving to 45 degrees...")
-            trigger_servo.angle = 45
+            trigger_servo.angle = servo_min
             time.sleep(0.5)
             
             print(f"Iteration {i + 1}: Moving to 100 degrees...")
-            trigger_servo.angle = 100
+            trigger_servo.angle = servo_max
             time.sleep(0.5)
             
         print("Test sequence complete.")
 
-        trigger_servo.angle = 45
+        trigger_servo.angle = servo_min
 
     except KeyboardInterrupt:
         print("\nExiting...")

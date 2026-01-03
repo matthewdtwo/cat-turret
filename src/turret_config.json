@@ -1,18 +1,18 @@
 {
     "pan_invert": true,
     "tilt_invert": false,
-    "kp_pan": 0.0025,
-    "kd_pan": 0.00025,
+    "kp_pan": 0.005,
+    "kd_pan": 0.01,
     "kp_tilt": 0.005,
     "kd_tilt": 0.005,
-    "pan_min": 26,
-    "pan_max": 240,
+    "pan_min": 73,
+    "pan_max": 196,
     "tilt_min": 126,
-    "tilt_max": 194,
-    "home_pan": 152.16165411146784,
-    "home_tilt": 153.40000000000344,
+    "tilt_max": 212,
+    "home_pan": 133.19999999999945,
+    "home_tilt": 153.4509236814782,
     "trigger_rest_angle": 45,
     "trigger_fire_angle": 180,
-    "tracking_enabled": true,
-    "armed": false
+    "tracking_enabled": false,
+    "armed": true
 }

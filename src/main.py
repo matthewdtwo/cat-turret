@@ -9,6 +9,8 @@ import cv2
 import board
 import psutil
 import json
+from adafruit_motor import servo
+from adafruit_pca9685 import PCA9685
 from pylx16a.lx16a import LX16A, ServoTimeoutError
 from pydantic import BaseModel
 
@@ -107,7 +109,7 @@ class TurretController:
         self.tilt_angle = 90.0
         self.center_x = 320
         self.center_y = 240
-        self.deadzone = 40
+        self.deadzone = 60
         self.calibration_mode = False
         
         # State for PID
@@ -148,7 +150,7 @@ class TurretController:
             "home_pan": (pan_min_deg + pan_max_deg) / 2,
             "home_tilt": (tilt_min_deg + tilt_max_deg) / 2,
             "trigger_rest_angle": 45,
-            "trigger_fire_angle": 180,
+            "trigger_fire_angle": 140,
             "tracking_enabled": False,
             "armed": False
         }
@@ -172,6 +174,10 @@ class TurretController:
             print(f"Error saving config: {e}")
 
     def update(self, target_pos):
+        # Safety: Don't move if not armed
+        if not self.config.get("armed", False):
+            return
+
         tracking_enabled = self.config.get("tracking_enabled", False)
 
         if not tracking_enabled:
@@ -183,12 +189,25 @@ class TurretController:
                 return
 
         if tracking_enabled and target_pos:
-            self.state = "TRACKING"
             x, y = target_pos
+            
+            # Bias the target position up by 20 pixels so the camera aims slightly above the target
+            y -= 50
             
             # Safety check for extreme values (assuming 640x480 resolution with some margin)
             if not (-200 < x < 840) or not (-200 < y < 680):
                 return
+
+            # Initialize state on first frame of tracking to prevent jumping
+            if self.state != "TRACKING":
+                self.prev_error_x = self.center_x - x
+                self.prev_error_y = self.center_y - y
+                self.last_pan = self.pan_angle
+                self.last_tilt = self.tilt_angle
+                self.search_vel_pan = 0
+                self.search_vel_tilt = 0
+
+            self.state = "TRACKING"
             
             # Calculate error
             # Camera X: 0 (Left) -> 640 (Right)
@@ -246,6 +265,10 @@ class TurretController:
                 self.pan_angle += self.search_vel_pan
                 self.tilt_angle += self.search_vel_tilt
                 
+                # Decay velocity to prevent overshoot
+                self.search_vel_pan *= 0.95
+                self.search_vel_tilt *= 0.95
+                
                 pan_min = self.config["pan_min"]
                 pan_max = self.config["pan_max"]
                 tilt_min = self.config["tilt_min"]
@@ -261,7 +284,8 @@ class TurretController:
                 if servo_output.is_ready():
                     servo_output.set_target(self.pan_angle, self.tilt_angle)
                 
-                if hit_limit:
+                # Stop searching if hit limit or stopped
+                if hit_limit or (abs(self.search_vel_pan) < 0.01 and abs(self.search_vel_tilt) < 0.01):
                     self.state = "RETURNING"
             
             elif self.state == "RETURNING":
@@ -301,26 +325,40 @@ def init_servos():
             servo_tilt.servo_mode()
         except ServoTimeoutError as e:
             print(f"Servo {e.id_} is not responding.")
-            return
-
-        # Trigger servo not yet supported on serial bus
-        servo_trigger = None
+            # Don't return here, try to init trigger servo anyway
+        
+        # Initialize PCA9685 for trigger servo
+        try:
+            i2c = board.I2C()
+            pca = PCA9685(i2c)
+            pca.frequency = 50
+            # Channel 16 is index 15
+            servo_trigger = servo.Servo(pca.channels[15])
+            
+            # Set to rest position
+            rest_angle = turret_controller.config.get("trigger_rest_angle", 45)
+            servo_trigger.angle = rest_angle
+            print("Trigger servo initialized.")
+        except Exception as e:
+            print(f"Error initializing trigger servo: {e}")
+            servo_trigger = None
         
         # Set initial position
-        servo_output.attach(servo_pan, servo_tilt)
-        servo_output.start()
-        
-        # Move to home position
-        home_pan = turret_controller.config.get("home_pan", 90)
-        home_tilt = turret_controller.config.get("home_tilt", 90)
-        servo_output.set_target(home_pan, home_tilt)
+        if servo_pan and servo_tilt:
+            servo_output.attach(servo_pan, servo_tilt)
+            servo_output.start()
+            
+            # Move to home position
+            home_pan = turret_controller.config.get("home_pan", 90)
+            home_tilt = turret_controller.config.get("home_tilt", 90)
+            servo_output.set_target(home_pan, home_tilt)
         
         print("Servos initialized.")
     except Exception as e:
         print(f"Error initializing servos: {e}")
 
 def deinit_servos():
-    global pca, servo_pan, servo_tilt
+    global pca, servo_pan, servo_tilt, servo_trigger
     print("Centering servos...")
     try:
         if servo_output.is_ready():
@@ -329,6 +367,11 @@ def deinit_servos():
                 turret_controller.config.get("home_tilt", 90),
             )
         time.sleep(0.5)
+        
+        # Deinit PCA
+        if pca:
+            pca.deinit()
+            
     except Exception as e:
         print(f"Error centering servos: {e}")
 
@@ -432,18 +475,107 @@ class VideoCamera:
                 break
         print("Camera update loop ended.")
 
+class ProcessingThread:
+    def __init__(self, camera, detector, controller):
+        self.camera = camera
+        self.detector = detector
+        self.controller = controller
+        self.running = False
+        self.thread = None
+        self.latest_processed_frame = None
+        self.lock = threading.Lock()
+        self.condition = threading.Condition()
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=1.0)
+
+    def _run(self):
+        fps_start_time = time.monotonic()
+        fps_counter = 0
+        fps = 0
+        targeting_system = TargetingSystem()
+
+        while self.running:
+            with self.camera.condition:
+                self.camera.condition.wait()
+                raw_frame = self.camera.raw_frame
+                capture_time = self.camera.capture_time
+
+            if raw_frame is not None:
+                # Run detection and control
+                annotated_image, (cat_pos, confidence) = self.detector.detect(raw_frame)
+                self.controller.update(cat_pos)
+
+                # Update targeting system
+                now = time.monotonic()
+                targeting_system.update(confidence > 0, now)
+
+                if annotated_image is not None:
+                    if cat_pos:
+                        targeting_system.draw(annotated_image, cat_pos, now)
+
+                    # Calculate FPS
+                    fps_counter += 1
+                    if now - fps_start_time > 1.0:
+                        fps = fps_counter / (now - fps_start_time)
+                        fps_counter = 0
+                        fps_start_time = now
+
+                    # Calculate Latency
+                    latency_ms = 0.0
+                    if capture_time:
+                        latency_ms = max(0.0, (now - capture_time) * 1000)
+
+                    # Draw FPS and Latency
+                    cv2.putText(annotated_image, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                    cv2.putText(annotated_image, f"Lat: {latency_ms:.0f}ms", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+                    # Draw State
+                    state_color = (0, 255, 0)
+                    if self.controller.state == "SEARCHING": state_color = (0, 255, 255)
+                    elif self.controller.state == "RETURNING": state_color = (0, 165, 255)
+                    elif self.controller.state == "IDLE": state_color = (200, 200, 200)
+                    
+                    cv2.putText(annotated_image, f"State: {self.controller.state}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, state_color, 2)
+
+                    # Encode for streaming (only if needed? No, we need it for the generator)
+                    # Optimization: Only encode if someone is watching? 
+                    # For now, let's encode here but maybe we can optimize later.
+                    # Actually, let's store the annotated image and let the generator encode it.
+                    # That moves encoding out of the control loop!
+                    
+                    with self.condition:
+                        self.latest_processed_frame = annotated_image
+                        self.condition.notify_all()
+
 camera = VideoCamera()
 detector = None
+processing_thread = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    global detector
+    global detector, processing_thread
     camera.start()
     detector = CatDetector()
     init_servos()
+    
+    processing_thread = ProcessingThread(camera, detector, turret_controller)
+    processing_thread.start()
+    
     yield
     # Shutdown
+    if processing_thread:
+        processing_thread.stop()
     if detector:
         detector.stop()
     camera.stop()
@@ -571,6 +703,9 @@ async def set_home():
 
 @app.post("/go_home")
 async def go_home():
+    if not turret_controller.config.get("armed", False):
+        return {"status": "error", "message": "System not armed"}
+
     # Disable tracking
     turret_controller.save_config({"tracking_enabled": False})
     
@@ -635,11 +770,17 @@ def test_range_sequence():
 
 @app.post("/test_range")
 async def test_range_endpoint():
+    if not turret_controller.config.get("armed", False):
+        return {"status": "error", "message": "System not armed"}
+
     threading.Thread(target=test_range_sequence).start()
     return {"status": "ok", "message": "Range test started"}
 
 @app.post("/control_servos")
 async def control_servos(request: ServoRequest):
+    if not turret_controller.config.get("armed", False):
+        return {"status": "error", "message": "System not armed"}
+
     if servo_output.is_ready():
         try:
             # Clamp values
@@ -698,8 +839,8 @@ class TargetingSystem:
     def __init__(self):
         self.detection_start_time = None
         self.last_detection_time = 0
-        self.dwell_threshold = 2.0
-        self.animation_duration = 0.5
+        self.dwell_threshold = 2.5
+        self.animation_duration = 1
         self.locked = False
 
     def update(self, is_detected, current_time):
@@ -760,65 +901,21 @@ def get_camera_frame():
             )
 
 def get_processed_frame():
-    fps_start_time = time.monotonic()
-    fps_counter = 0
-    fps = 0
-    targeting_system = TargetingSystem()
-    
     while True:
-        with camera.condition:
-            camera.condition.wait()
-            raw_frame = camera.raw_frame
-            capture_time = camera.capture_time
+        with processing_thread.condition:
+            processing_thread.condition.wait()
+            frame = processing_thread.latest_processed_frame
         
-        if raw_frame is not None:
-            annotated_image, (cat_pos, confidence) = detector.detect(raw_frame)
-            
-            # Update turret controller
-            turret_controller.update(cat_pos)
-
-            # Update targeting system
-            now = time.monotonic()
-            targeting_system.update(confidence > 0, now)
-
-            if annotated_image is not None:
-                # Draw targeting animation
-                if cat_pos:
-                    targeting_system.draw(annotated_image, cat_pos, now)
-
-                # Calculate FPS
-                fps_counter += 1
-                if now - fps_start_time > 1.0:
-                    fps = fps_counter / (now - fps_start_time)
-                    fps_counter = 0
-                    fps_start_time = now
-                
-                # Calculate Latency
-                latency_ms = 0.0
-                if capture_time:
-                    latency_ms = max(0.0, (now - capture_time) * 1000)
-                
-                # Draw FPS and Latency
-                cv2.putText(annotated_image, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                cv2.putText(annotated_image, f"Lat: {latency_ms:.0f}ms", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                
-                # Draw State
-                state_color = (0, 255, 0)
-                if turret_controller.state == "SEARCHING": state_color = (0, 255, 255)
-                elif turret_controller.state == "RETURNING": state_color = (0, 165, 255)
-                elif turret_controller.state == "IDLE": state_color = (200, 200, 200)
-                
-                cv2.putText(annotated_image, f"State: {turret_controller.state}", (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 1, state_color, 2)
-                
-                ret, buffer = cv2.imencode(
-                    '.jpg',
-                    annotated_image,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), 70],
-                )
-                if ret:
-                    frame_bytes = buffer.tobytes()
-                    yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        if frame is not None:
+            ret, buffer = cv2.imencode(
+                '.jpg',
+                frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), 70],
+            )
+            if ret:
+                frame_bytes = buffer.tobytes()
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
 
 @app.get("/video_feed")
 async def video_feed():

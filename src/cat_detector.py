@@ -27,9 +27,9 @@ class CatTracker:
         self.kf.processNoiseCov = np.array([[1, 0, 0, 0],
                                             [0, 1, 0, 0],
                                             [0, 0, 5, 0],
-                                            [0, 0, 0, 5]], np.float32) * 0.03
+                                            [0, 0, 0, 5]], np.float32) * 0.01
         self.kf.measurementNoiseCov = np.array([[1, 0],
-                                                [0, 1]], np.float32) * 1
+                                                [0, 1]], np.float32) * 2
         self.found = False
 
     def update(self, measurement):

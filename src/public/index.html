@@ -223,11 +223,10 @@
             cursor: pointer;
             user-select: none;
             z-index: 20;
-            transition: background 0.2s, transform 0.1s;
+            transition: background 0.2s;
         }
         .turret-arrow:active {
             background: rgba(255, 255, 255, 0.3);
-            transform: scale(0.95);
         }
         .arrow-up { top: 20px; left: 50%; transform: translateX(-50%); }
         .arrow-down { bottom: 20px; left: 50%; transform: translateX(-50%); }
@@ -270,10 +269,10 @@
             <img id="main-feed" src="/video_feed_processed" alt="Processed Feed">
             <img id="pip-feed" src="/video_feed" alt="Raw Feed">
             
-            <div class="turret-arrow arrow-up" data-axis="tilt" data-dir="-1">▲</div>
-            <div class="turret-arrow arrow-down" data-axis="tilt" data-dir="1">▼</div>
-            <div class="turret-arrow arrow-left" data-axis="pan" data-dir="-1">◀</div>
-            <div class="turret-arrow arrow-right" data-axis="pan" data-dir="1">▶</div>
+            <div class="turret-arrow arrow-up" data-axis="tilt" data-dir="1">▲</div>
+            <div class="turret-arrow arrow-down" data-axis="tilt" data-dir="-1">▼</div>
+            <div class="turret-arrow arrow-left" data-axis="pan" data-dir="1">◀</div>
+            <div class="turret-arrow arrow-right" data-axis="pan" data-dir="-1">▶</div>
         </div>
 
         <div class="side-panel">
