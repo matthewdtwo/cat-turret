@@ -4,6 +4,8 @@ __pycache__/
 *.pyc
 .DS_Store
 secrets.json
+turret_config.json
 
 *.m4a
 *.mp3
+

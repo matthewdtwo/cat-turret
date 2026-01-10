@@ -279,8 +279,11 @@
             <div class="action-panel">
                 <button id="btn-tracking" class="action-btn">Auto Tracking: OFF</button>
                 <button id="btn-detect-toggle" class="action-btn" style="background: #007bff;">Detect: Cat</button>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                    <button onclick="setHome()" class="action-btn" style="background: #6c757d; font-size: 1em; padding: 10px;">Set Home</button>
+                    <button onclick="goHome()" class="action-btn" style="background: #6c757d; font-size: 1em; padding: 10px;">Go Home</button>
+                </div>
                 <button id="btn-armed" class="action-btn"><span>ARM</span></button>                <button id="btn-fire" class="action-btn"><span>FIRE</span></button>
-                <button onclick="testWebhook()" class="action-btn" style="background: #6f42c1;">Test Webhook</button>
             </div>
 
             <div class="debug-panel">
@@ -308,8 +311,14 @@
             </div>
             
             <div class="config-panel">
-                <h2>Configuration</h2>
-                <div class="control-group">
+                <details>
+                    <summary style="cursor: pointer; margin-bottom: 5px; outline: none;">
+                        <h2 style="display: inline; border: none; margin: 0; padding: 0;">Configuration</h2>
+                    </summary>
+                    <div style="border-top: 1px solid #555; padding-top: 15px;">
+                        <button onclick="testWebhook()" class="action-btn" style="background: #6f42c1; margin-bottom: 15px; padding: 10px; font-size: 1em;">Test Webhook</button>
+                        
+                        <div class="control-group">
                     <label style="width: auto; margin-right: 10px;">Invert Pan</label>
                     <input type="checkbox" id="invert-pan" style="flex-grow: 0;">
                 </div>
@@ -353,11 +362,6 @@
                     <button id="btn-start-cal" onclick="startCalibration()" style="width: 100%; padding: 8px; background: #ffc107; color: black; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 10px;">Calibrate Range of Motion</button>
                     <button onclick="testRange()" style="width: 100%; padding: 8px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 10px;">Test Range of Motion</button>
                     
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
-                        <button onclick="setHome()" style="padding: 8px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Set Current as Home</button>
-                        <button onclick="goHome()" style="padding: 8px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer;">Go Home</button>
-                    </div>
-
                     <div class="control-group">
                         <label style="width: 100%;">
                             Pan Range:
@@ -391,6 +395,8 @@
                 </div>
 
                 <button onclick="saveConfig()" style="width: 100%; padding: 8px; background: #555; color: white; border: none; border-radius: 4px; cursor: pointer; margin-top: 10px;">Save Config</button>
+                    </div>
+                </details>
             </div>
         </div>
 

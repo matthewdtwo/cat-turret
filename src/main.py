@@ -341,6 +341,8 @@ class TurretController:
     def set_manual(self, pan, tilt):
         self.pan_angle = pan
         self.tilt_angle = tilt
+        # Override return-to-home or other automatic states
+        self.state = "IDLE"
         if servo_output.is_ready():
             servo_output.set_target(self.pan_angle, self.tilt_angle)
 
