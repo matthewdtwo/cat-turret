@@ -280,6 +280,7 @@
                 <button id="btn-tracking" class="action-btn">Auto Tracking: OFF</button>
                 <button id="btn-detect-toggle" class="action-btn" style="background: #007bff;">Detect: Cat</button>
                 <button id="btn-armed" class="action-btn"><span>ARM</span></button>                <button id="btn-fire" class="action-btn"><span>FIRE</span></button>
+                <button onclick="testWebhook()" class="action-btn" style="background: #6f42c1;">Test Webhook</button>
             </div>
 
             <div class="debug-panel">
@@ -436,6 +437,19 @@
         let currentTarget = 'cat';
         let configLimits = { pan_min: 0, pan_max: 240, tilt_min: 0, tilt_max: 240 };
         let isCalibrating = false;
+
+        function testWebhook() {
+            fetch('/test_webhook', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        alert('Webhook test triggered!');
+                    } else {
+                        alert('Error: ' + data.message);
+                    }
+                })
+                .catch(console.error);
+        }
 
         function updateDetectUI(target) {
             currentTarget = target;

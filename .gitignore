@@ -3,3 +3,7 @@
 __pycache__/
 *.pyc
 .DS_Store
+secrets.json
+
+*.m4a
+*.mp3

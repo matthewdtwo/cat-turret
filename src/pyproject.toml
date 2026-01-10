@@ -18,5 +18,7 @@ dependencies = [
     "psutil>=5.9.0",
     "pylx16a>=1.1.1",
     "pillow>=12.0.0",
+    "pydub>=0.25.1",
+    "pyaudio>=0.2.14",
 ]
 

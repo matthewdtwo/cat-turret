@@ -5,7 +5,7 @@ from pylx16a.lx16a import *
 import time
 
 
-LX16A.initialize("/dev/ttyUSB0")
+LX16A.initialize("/dev/ttyUSB1)
 
 def map_range(x, in_min=0, in_max=1000, out_min=0, out_max=240):
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min

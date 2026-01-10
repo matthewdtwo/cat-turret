@@ -9,6 +9,7 @@ import cv2
 import board
 import psutil
 import json
+import urllib.request
 from adafruit_motor import servo
 from adafruit_pca9685 import PCA9685
 from pylx16a.lx16a import LX16A, ServoTimeoutError
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -28,6 +29,24 @@ servo_pan = None
 servo_tilt = None
 servo_trigger = None
 
+
+def fire_turret_sync():
+    global servo_trigger
+    if not turret_controller.config.get("armed", False):
+        return
+
+    if servo_trigger:
+        try:
+            # Fire sequence
+            fire_angle = turret_controller.config["trigger_fire_angle"]
+            rest_angle = turret_controller.config["trigger_rest_angle"]
+            
+            servo_trigger.angle = fire_angle
+            time.sleep(0.5)
+            servo_trigger.angle = rest_angle
+            print("Fired (Scan initiated)")
+        except Exception as e:
+            print(f"Error firing: {e}")
 
 class ServoOutput:
     def __init__(self, rate_hz: float = 50.0):
@@ -103,6 +122,8 @@ servo_output = ServoOutput(rate_hz=60.0)
 class TurretController:
     def __init__(self):
         self.config_file = os.path.join(os.path.dirname(__file__), "turret_config.json")
+        self.secrets_file = os.path.join(os.path.dirname(__file__), "secrets.json")
+        self.webhook_url = ""
         self.load_config()
         
         self.pan_angle = 90.0
@@ -157,12 +178,25 @@ class TurretController:
         try:
             if os.path.exists(self.config_file):
                 with open(self.config_file, 'r') as f:
+                    # Merge defaults with loaded config (to ensure new keys exist)
                     self.config = {**defaults, **json.load(f)}
+                    # Remove webhook_url from config if it exists (legacy)
+                    if "webhook_url" in self.config:
+                        del self.config["webhook_url"]
             else:
                 self.config = defaults
         except Exception as e:
             print(f"Error loading config: {e}")
             self.config = defaults
+
+        # Load secrets
+        try:
+            if os.path.exists(self.secrets_file):
+                with open(self.secrets_file, 'r') as f:
+                    secrets = json.load(f)
+                    self.webhook_url = secrets.get("webhook_url", "")
+        except Exception as e:
+            print(f"Error loading secrets: {e}")
 
     def save_config(self, new_config=None):
         try:
@@ -352,6 +386,10 @@ def init_servos():
             home_pan = turret_controller.config.get("home_pan", 90)
             home_tilt = turret_controller.config.get("home_tilt", 90)
             servo_output.set_target(home_pan, home_tilt)
+            
+            # Sync controller state with home position
+            turret_controller.pan_angle = home_pan
+            turret_controller.tilt_angle = home_tilt
         
         print("Servos initialized.")
     except Exception as e:
@@ -498,11 +536,104 @@ class ProcessingThread:
         if self.thread:
             self.thread.join(timeout=1.0)
 
+    def handle_lock(self, image):
+        # 1. Send Webhook (in background)
+        self.send_webhook(image)
+        
+        # 2. Audio Sequence and Fire (in background)
+        def _sequence():
+            # Play Audio
+            audio_path = os.path.join(os.path.dirname(__file__), "../resources/get_down.m4a")
+            print(f"Playing audio: {audio_path}")
+            if os.path.exists(audio_path):
+                try:
+                    from pydub import AudioSegment
+                    import pyaudio
+
+                    song = AudioSegment.from_file(audio_path)
+                    p = pyaudio.PyAudio()
+                    
+                    # Device 0 is the USB Audio Device
+                    # We need to ensure the audio matches what the hardware supports
+                    # We'll try 48000Hz first, then 44100Hz
+                    target_rate = 48000
+                    try:
+                        if not p.is_format_supported(48000, output_device=0, output_channels=2, output_format=pyaudio.paInt16):
+                            target_rate = 44100
+                    except:
+                        target_rate = 44100 # Fallback
+
+                    if song.frame_rate != target_rate:
+                        song = song.set_frame_rate(target_rate)
+                    
+                    # Ensure 2 channels as most hardware expects stereo or can handle it better
+                    if song.channels != 2:
+                        song = song.set_channels(2)
+
+                    stream = p.open(format=p.get_format_from_width(song.sample_width),
+                                    channels=song.channels,
+                                    rate=song.frame_rate,
+                                    output=True,
+                                    output_device_index=0)
+                    
+                    # Break into chunks
+                    chunk_size = 1024
+                    data = song.raw_data
+                    
+                    for i in range(0, len(data), chunk_size):
+                        stream.write(data[i:i+chunk_size])
+
+                    stream.stop_stream()
+                    stream.close()
+                    p.terminate()
+
+                except Exception as e:
+                    print(f"Error playing audio: {e}")
+            else:
+                print("Audio file not found")
+            
+            # Wait 2 seconds
+            time.sleep(2.0)
+            
+            # Fire!
+            fire_turret_sync()
+
+        if self.controller.config.get("armed", False):
+            threading.Thread(target=_sequence, daemon=True).start()
+
+    def send_webhook(self, image):
+        webhook_url = self.controller.webhook_url
+        if not webhook_url:
+            return
+
+        def _send(url):
+            try:
+                # Send a JSON payload instead of raw image bytes
+                data = json.dumps({
+                    "event": "target_locked",
+                    "timestamp": time.time()
+                }).encode('utf-8')
+                
+                req = urllib.request.Request(
+                    url, 
+                    data=data, 
+                    headers={'Content-Type': 'application/json'}, 
+                    method='POST'
+                )
+                with urllib.request.urlopen(req) as f:
+                    pass
+                print(f"Webhook sent to {url}")
+            except Exception as e:
+                print(f"Error sending webhook: {e}")
+
+        # Send in a separate thread
+        threading.Thread(target=_send, args=(webhook_url,), daemon=True).start()
+
     def _run(self):
         fps_start_time = time.monotonic()
         fps_counter = 0
         fps = 0
-        targeting_system = TargetingSystem()
+        targeting_system = TargetingSystem(lock_callback=self.handle_lock)
 
         while self.running:
             with self.camera.condition:
@@ -517,7 +648,9 @@ class ProcessingThread:
 
                 # Update targeting system
                 now = time.monotonic()
-                targeting_system.update(confidence > 0, now)
+                is_armed = self.controller.config.get("armed", False)
+                is_tracking = self.controller.config.get("tracking_enabled", False)
+                targeting_system.update(confidence > 0 and is_armed and is_tracking, now)
 
                 if annotated_image is not None:
                     if cat_pos:
@@ -616,7 +749,9 @@ async def fire_turret():
 
     if servo_trigger:
         try:
-            # Fire sequence
+            # Use sync function in a thread to not block event loop? 
+            # Or just duplicate logic with asyncio.sleep for async route?
+            # Let's duplicate slightly to behave properly async
             fire_angle = turret_controller.config["trigger_fire_angle"]
             rest_angle = turret_controller.config["trigger_rest_angle"]
             
@@ -760,6 +895,31 @@ async def test_range_endpoint():
     threading.Thread(target=test_range_sequence).start()
     return {"status": "ok", "message": "Range test started"}
 
+@app.post("/test_webhook")
+async def test_webhook():
+    if not processing_thread or not processing_thread.running:
+         return {"status": "error", "message": "Processing thread not running"}
+
+    # Get the latest frame safely
+    frame = None
+    with processing_thread.condition:
+        if processing_thread.latest_processed_frame is not None:
+             frame = processing_thread.latest_processed_frame.copy()
+    
+    if frame is None:
+        # Fallback to waiting for a frame if none is available immediately? 
+        # Or just try to get raw frame from camera?
+        # Let's try raw camera frame if processed frame isn't ready
+        with camera.condition:
+            if camera.raw_frame is not None:
+                frame = camera.raw_frame.copy()
+
+    if frame is None:
+         return {"status": "error", "message": "No frame available"}
+
+    processing_thread.send_webhook(frame)
+    return {"status": "ok", "message": "Webhook test triggered"}
+
 @app.post("/control_servos")
 async def control_servos(request: ServoRequest):
     if not turret_controller.config.get("armed", False):
@@ -820,12 +980,14 @@ async def system_stats():
 
 
 class TargetingSystem:
-    def __init__(self):
+    def __init__(self, lock_callback=None):
         self.detection_start_time = None
         self.last_detection_time = 0
         self.dwell_threshold = 2.5
         self.animation_duration = 1
         self.locked = False
+        self.lock_callback = lock_callback
+        self.has_fired_callback = False
 
     def update(self, is_detected, current_time):
         if is_detected:
@@ -837,6 +999,7 @@ class TargetingSystem:
             if current_time - self.last_detection_time > 0.5:
                 self.detection_start_time = None
                 self.locked = False
+                self.has_fired_callback = False
 
     def draw(self, image, center_pos, current_time):
         if self.detection_start_time is None or center_pos is None:
@@ -846,6 +1009,12 @@ class TargetingSystem:
         
         if dwell_time > self.dwell_threshold:
             self.locked = True
+            
+            if not self.has_fired_callback and self.lock_callback:
+                self.has_fired_callback = True
+                # Call the callback with the image
+                self.lock_callback(image)
+                
             # Animation phase (0.0 to 1.0)
             anim_time = dwell_time - self.dwell_threshold
             progress = min(1.0, anim_time / self.animation_duration)
@@ -908,6 +1077,50 @@ async def video_feed():
 @app.get("/video_feed_processed")
 async def video_feed_processed():
     return StreamingResponse(get_processed_frame(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.get("/snapshot")
+async def snapshot():
+    # Attempt to get processed frame first
+    frame = None
+    if processing_thread:
+        with processing_thread.condition:
+            if processing_thread.latest_processed_frame is not None:
+                frame = processing_thread.latest_processed_frame.copy()
+    
+    # Fallback to raw frame
+    if frame is None and camera:
+        with camera.condition:
+            if camera.raw_frame is not None:
+                frame = camera.raw_frame.copy()
+                
+    if frame is not None:
+        ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if ret:
+            return Response(content=buffer.tobytes(), media_type="image/jpeg")
+            
+    return Response(content=b"", status_code=503)
+
+@app.get("/snapshot")
+async def snapshot():
+    # Attempt to get processed frame first
+    frame = None
+    if processing_thread:
+        with processing_thread.condition:
+            if processing_thread.latest_processed_frame is not None:
+                frame = processing_thread.latest_processed_frame.copy()
+    
+    # Fallback to raw frame
+    if frame is None and camera:
+        with camera.condition:
+            if camera.raw_frame is not None:
+                frame = camera.raw_frame.copy()
+                
+    if frame is not None:
+        ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if ret:
+            return Response(content=buffer.tobytes(), media_type="image/jpeg")
+            
+    return Response(content=b"", status_code=503)
 
 @app.get("/")
 async def read_root():
