@@ -525,7 +525,8 @@ class ProcessingThread:
         self.latest_processed_frame = None
         self.lock = threading.Lock()
         self.condition = threading.Condition()
-
+        self.targeting_system = None # Will be initialized when run starts or lazily
+        
     def start(self):
         if self.running:
             return
@@ -597,8 +598,21 @@ class ProcessingThread:
             # Wait 2 seconds
             time.sleep(2.0)
             
-            # Fire!
-            fire_turret_sync()
+            # Safety Check: Only fire if still tracking and still locked
+            is_tracking = self.controller.config.get("tracking_enabled", False)
+            
+            # Check targeting system state (thread-safe enough for boolean check)
+            is_still_locked = False
+            if self.targeting_system and self.targeting_system.locked:
+                # Extra check: ensure we really are still detecting recently
+                # locked is updated in main loop, if target is lost, locked becomes False after 0.5s
+                is_still_locked = True
+
+            if is_tracking and is_still_locked:
+                print("Target confirmed. Firing!")
+                fire_turret_sync()
+            else:
+                 print(f"Fire aborted: Tracking={is_tracking}, Locked={is_still_locked}")
 
         if self.controller.config.get("armed", False):
             threading.Thread(target=_sequence, daemon=True).start()
@@ -635,7 +649,7 @@ class ProcessingThread:
         fps_start_time = time.monotonic()
         fps_counter = 0
         fps = 0
-        targeting_system = TargetingSystem(lock_callback=self.handle_lock)
+        self.targeting_system = TargetingSystem(lock_callback=self.handle_lock)
 
         while self.running:
             with self.camera.condition:
@@ -652,11 +666,11 @@ class ProcessingThread:
                 now = time.monotonic()
                 is_armed = self.controller.config.get("armed", False)
                 is_tracking = self.controller.config.get("tracking_enabled", False)
-                targeting_system.update(confidence > 0 and is_armed and is_tracking, now)
+                self.targeting_system.update(confidence > 0 and is_armed and is_tracking, now)
 
                 if annotated_image is not None:
                     if cat_pos:
-                        targeting_system.draw(annotated_image, cat_pos, now)
+                        self.targeting_system.draw(annotated_image, cat_pos, now)
 
                     # Draw State
                     state_color = (0, 255, 0)

@@ -1,3 +1,7 @@
+### 2026-01-11 UI
+- Plays voice clip before firing
+
+
 ### 2025-12-30 integration
 - 3d printed hardware to mount spray bottle nozzle to pan tilt gantry.
 - refined software for smoother manual control of the turret. 
