@@ -345,6 +345,22 @@
                 </div>
 
                 <div style="margin-top: 10px; border-top: 1px solid #555; padding-top: 10px;">
+                    <h3 style="margin: 0 0 10px 0; font-size: 1em;">Trigger Settings</h3>
+                    <div class="control-group">
+                        <label style="width: 100%;">
+                            Rest Angle: <span id="trigger-rest-val">--</span>
+                        </label>
+                        <input type="range" id="trigger-rest" min="0" max="180" step="1">
+                    </div>
+                    <div class="control-group">
+                        <label style="width: 100%;">
+                            Fire Angle: <span id="trigger-fire-val">--</span>
+                        </label>
+                        <input type="range" id="trigger-fire" min="0" max="180" step="1">
+                    </div>
+                </div>
+
+                <div style="margin-top: 10px; border-top: 1px solid #555; padding-top: 10px;">
                     <h3 style="margin: 0 0 10px 0; font-size: 1em;">Servo Limits</h3>
                     
                     <div id="calibration-controls" style="display: none; background: #444; padding: 10px; border-radius: 4px; margin-bottom: 10px;">
@@ -424,10 +440,14 @@
         const panMaxInput = document.getElementById('pan-max');
         const tiltMinInput = document.getElementById('tilt-min');
         const tiltMaxInput = document.getElementById('tilt-max');
+        const triggerRestInput = document.getElementById('trigger-rest');
+        const triggerFireInput = document.getElementById('trigger-fire');
         const panCurrentInput = document.getElementById('pan-current');
         const tiltCurrentInput = document.getElementById('tilt-current');
         const panRangeVal = document.getElementById('pan-range-val');
         const tiltRangeVal = document.getElementById('tilt-range-val');
+        const triggerRestVal = document.getElementById('trigger-rest-val');
+        const triggerFireVal = document.getElementById('trigger-fire-val');
         const panMinLabel = document.getElementById('pan-min-label');
         const panMaxLabel = document.getElementById('pan-max-label');
         const panCurrentLabel = document.getElementById('pan-current-label');
@@ -564,6 +584,9 @@
             panMaxLabel.textContent = `${panMaxInput.value}`;
             tiltMinLabel.textContent = `${tiltMinInput.value}`;
             tiltMaxLabel.textContent = `${tiltMaxInput.value}`;
+            
+            triggerRestVal.textContent = triggerRestInput.value;
+            triggerFireVal.textContent = triggerFireInput.value;
         }
 
         function clamp(val, min, max) {
@@ -580,7 +603,7 @@
             tiltCurrentLabel.textContent = `${tiltVal}`;
         }
 
-        [panMinInput, panMaxInput, tiltMinInput, tiltMaxInput].forEach(input => {
+        [panMinInput, panMaxInput, tiltMinInput, tiltMaxInput, triggerRestInput, triggerFireInput].forEach(input => {
             input.addEventListener('input', updateRangeLabels);
         });
 
@@ -596,6 +619,9 @@
             panMaxInput.value = config.pan_max !== undefined ? config.pan_max : 240;
             tiltMinInput.value = config.tilt_min !== undefined ? config.tilt_min : 0;
             tiltMaxInput.value = config.tilt_max !== undefined ? config.tilt_max : 240;
+            
+            triggerRestInput.value = config.trigger_rest_angle !== undefined ? config.trigger_rest_angle : 45;
+            triggerFireInput.value = config.trigger_fire_angle !== undefined ? config.trigger_fire_angle : 166;
             
             configLimits.pan_min = parseInt(panMinInput.value);
             configLimits.pan_max = parseInt(panMaxInput.value);
@@ -625,7 +651,9 @@
                 pan_min: parseInt(panMinInput.value),
                 pan_max: parseInt(panMaxInput.value),
                 tilt_min: parseInt(tiltMinInput.value),
-                tilt_max: parseInt(tiltMaxInput.value)
+                tilt_max: parseInt(tiltMaxInput.value),
+                trigger_rest_angle: parseFloat(triggerRestInput.value),
+                trigger_fire_angle: parseFloat(triggerFireInput.value)
             };
             
             // Update local limits immediately

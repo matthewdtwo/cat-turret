@@ -171,7 +171,7 @@ class TurretController:
             "home_pan": (pan_min_deg + pan_max_deg) / 2,
             "home_tilt": (tilt_min_deg + tilt_max_deg) / 2,
             "trigger_rest_angle": 45,
-            "trigger_fire_angle": 140,
+            "trigger_fire_angle": 100,
             "tracking_enabled": False,
             "armed": False
         }
@@ -732,7 +732,7 @@ class ConfigRequest(BaseModel):
     tilt_min: int = 0
     tilt_max: int = 240
     trigger_rest_angle: float = 45
-    trigger_fire_angle: float = 180
+    trigger_fire_angle: float = 166
 
 @app.get("/config")
 async def get_config():
